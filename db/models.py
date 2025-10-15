@@ -1,12 +1,22 @@
-from sqlalchemy import Column , Integer , String, Boolean,DateTime
+from sqlalchemy import Column , Integer , String, Boolean,DateTime, Enum, Relationship, Table
 from sqlalchemy.ext.declarative  import  declarative_base 
 from datetime import datetime
+import enum
 Base = declarative_base()
+
+class ScheduleType(enum.Enum):
+      custom= "custom"
+      weekly= "weekly"
+      monthly= "monthly"
+
+
+
+
 
 class User(Base):
      __tablename__ = "users"
      id = Column(Integer, primary_key=True, index=True)
-     user_id = Column(Integer , unique=True, nullabel =False)
+     user_id = Column(Integer , unique=True, nullable =False)
      username = Column(String, nullable=True)
      is_admin = Column(Boolean, default =False)
      batch = Column(String , nullable =False  )
@@ -20,3 +30,5 @@ class Schedule(Base):
    message = Column(String, nullable = False )
    created_at = Column(DateTime, default = datetime.utcnow)
       
+
+
