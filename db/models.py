@@ -1,5 +1,5 @@
-from sqlalchemy import Column , Integer , String, Boolean,DateTime, Enum, Relationship, Table
-from sqlalchemy.ext.declarative  import  declarative_base 
+from sqlalchemy import Column , Integer , String, Boolean,DateTime, Enum, ForeignKey, Table
+from sqlalchemy.orm  import  declarative_base, relationship
 from datetime import datetime
 import enum
 Base = declarative_base()
@@ -9,7 +9,13 @@ class ScheduleType(enum.Enum):
       weekly= "weekly"
       monthly= "monthly"
 
+Schedule_batch = Table(
+     "schedule_batch",
+      Base.metadata,
+      Column("schedule_id", ForeignKey("schedules.id"), primary_key=True),
+      Column("batch_name", ForeignKey("batches.name"), primary_key=True),
 
+)
 
 
 
@@ -30,5 +36,9 @@ class Schedule(Base):
    message = Column(String, nullable = False )
    created_at = Column(DateTime, default = datetime.utcnow)
       
-
+class Batch(Base):
+     __tablename__="batches"
+     name =Column(String, primary_key=True)
+     users=relationship("Schedule", secondary=Schedule_batch, batch_populates="batches")
+     
 
