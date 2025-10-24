@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, Enum, Table, Text
+    Column, BIGINT,Integer, String, Boolean, DateTime, ForeignKey, Enum, Table, Text
 )
 
 
@@ -29,7 +29,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
 
-    user_id = Column(Integer, unique=True, nullable=False)
+    user_id = Column(BIGINT, unique=True, nullable=False)
 
     username = Column(String, nullable=True)
 
