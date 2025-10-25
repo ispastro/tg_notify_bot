@@ -26,7 +26,7 @@ class User(Base):
     user_id = Column(BIGINT, unique=True, nullable=False)  # PostgreSQL-specific BIGINT
     username = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
-    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
     join_date = Column(DateTime, default=datetime.utcnow)
     batch = relationship("Batch", back_populates="users")
 

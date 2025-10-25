@@ -1,22 +1,25 @@
-from aiogram import types
-from aiogram.filters import CommandStart, Text
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram import types, F
+from aiogram.filters import CommandStart
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from datetime import datetime
 from sqlalchemy import select
 
 from loader import dp
 from db.session import AsyncSessionLocal
-from db.models import User, Batch  # Make sure Batch is imported
+from db.models import User, Batch
 from config import SUPER_ADMIN_ID
 
 
-BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+async def get_batch_names(session):
+    """Fetch all batch names from DB."""
+    result = await session.execute(select(Batch.name))
+    return [b[0] for b in result.all()]
 
 
-def create_batch_keyboard():
+def create_batch_keyboard(batch_names: list):
     """Return a ReplyKeyboardMarkup with batch options."""
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=b)] for b in BATCHES],
+        keyboard=[[KeyboardButton(text=name)] for name in batch_names],
         resize_keyboard=True
     )
 
@@ -27,11 +30,10 @@ async def cmd_start(message: types.Message):
     username = message.from_user.username or "N/A"
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == user_id))
-        user = result.scalar_one_or_none()
+        user_result = await session.execute(select(User).where(User.user_id == user_id))
+        user = user_result.scalar_one_or_none()
 
         if not user:
-            # Create new user
             user = User(
                 user_id=user_id,
                 username=username,
@@ -39,32 +41,53 @@ async def cmd_start(message: types.Message):
                 join_date=datetime.utcnow()
             )
             session.add(user)
-            await session.commit()  # commit here to get user.id if needed later
+            await session.commit()  # get user.id
 
             if user.is_admin:
                 await message.answer("Welcome, Super Admin 👑\nYou have full privileges.")
             else:
-                await message.answer("Welcome! 👋 Please select your batch:", reply_markup=create_batch_keyboard())
+                batch_names = await get_batch_names(session)
+                await message.answer(
+                    "Welcome! 👋 Please select your batch:",
+                    reply_markup=create_batch_keyboard(batch_names)
+                )
         else:
-            await message.answer("You’re already registered ✅")
+            if not user.batch_id:
+                batch_names = await get_batch_names(session)
+                await message.answer(
+                    "Welcome back! 👋 Please select your batch:",
+                    reply_markup=create_batch_keyboard(batch_names)
+                )
+            else:
+                await message.answer(f"You're already registered in batch ✅")
 
 
-@dp.message(Text(equals=BATCHES))
+@dp.message(F.text)
 async def handle_batch_selection(message: types.Message):
     user_id = message.from_user.id
-    batch_name = message.text
+    selected_batch_name = message.text.strip()
 
     async with AsyncSessionLocal() as session:
-        # Get user and batch in one query each
+        # Validate user exists
         user_result = await session.execute(select(User).where(User.user_id == user_id))
         user = user_result.scalar_one_or_none()
+        if not user:
+            await message.answer("⚠️ You are not registered. Please send /start first.")
+            return
 
-        batch_result = await session.execute(select(Batch).where(Batch.name == batch_name))
+        # Fetch the batch
+        batch_result = await session.execute(select(Batch).where(Batch.name == selected_batch_name))
         batch = batch_result.scalar_one_or_none()
 
-        if user and batch:
-            user.batch_id = batch.id
-            await session.commit()
-            await message.answer(f"✅ You’ve been assigned to {batch_name} batch!")
-        else:
-            await message.answer("⚠️ Something went wrong. Please try again.")
+        if not batch:
+            await message.answer("⚠️ Invalid batch selection. Please select from the keyboard.")
+            return
+
+        if user.batch_id == batch.id:
+            await message.answer(f"✅ You are already assigned to {batch.name} batch.", reply_markup=ReplyKeyboardRemove())
+            return
+
+        # Assign batch
+        user.batch_id = batch.id
+        await session.commit()
+        await message.answer(f"✅ You’ve been assigned to {batch.name} batch!" , reply_markup=ReplyKeyboardRemove())
