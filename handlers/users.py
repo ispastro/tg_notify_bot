@@ -27,7 +27,8 @@ def create_batch_keyboard(batch_names: list):
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    username = message.from_user.username or "N/A"
+    # Store None when no username is provided by Telegram.
+    username = message.from_user.username
 
     async with AsyncSessionLocal() as session:
         user_result = await session.execute(select(User).where(User.user_id == user_id))
@@ -64,6 +65,10 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.text)
 async def handle_batch_selection(message: types.Message):
+    # Skip commands (messages starting with '/')
+    if message.text.startswith('/'):
+        return
+
     user_id = message.from_user.id
     selected_batch_name = message.text.strip()
 
