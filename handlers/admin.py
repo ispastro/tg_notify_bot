@@ -135,7 +135,7 @@ async def refresh_total_users(callback_query: types.CallbackQuery):
     await callback_query.answer("Updated!")
 
 
-# --- /whoami (debug) ---
+# --- /whoami (ULTIMATE WORKING VERSION) ---
 @dp.message(Command("whoami"))
 async def cmd_whoami(message: types.Message):
     user_id = message.from_user.id
@@ -149,12 +149,15 @@ async def cmd_whoami(message: types.Message):
     in_db = bool(user)
     is_admin = user.is_admin if user else False
 
+    # HTML — SAFE, CLEAN, NO PARSING ERRORS
     await message.answer(
-        f"**Your Info**\n"
-        f"• ID: `{user_id}`\n"
-        f"• Username: @{username}\n"
-        f"• In DB: `{in_db}`\n"
-        f"• is_admin: `{is_admin}`\n"
-        f"• SUPER_ADMIN_ID: `{SUPER_ADMIN_ID}`",
-        parse_mode="Markdown"
+        "<b>Your Info</b>\n"
+        "• ID: <code>{}</code>\n"
+        "• Username: @{}\n"
+        "• In DB: <code>{}</code>\n"
+        "• is_admin: <code>{}</code>\n"
+        "• SUPER_ADMIN_ID: <code>{}</code>".format(
+            user_id, username, in_db, is_admin, SUPER_ADMIN_ID
+        ),
+        parse_mode="HTML"
     )
