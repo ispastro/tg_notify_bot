@@ -1,7 +1,8 @@
+# db/models.py — ULTIMATE VERSION
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, ForeignKey, Enum, Table, Text
 )
-from sqlalchemy.dialects.postgresql import BIGINT  # PostgreSQL-specific BIGINT
+from sqlalchemy.dialects.postgresql import BIGINT
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import enum
@@ -22,8 +23,8 @@ schedule_batch_association = Table(
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(BIGINT, unique=True, nullable=False)  # PostgreSQL-specific BIGINT
+    id = Column(Integer, primary_key=True)  # Internal DB ID
+    user_id = Column(BIGINT, unique=True, nullable=False)  # Telegram ID
     username = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
@@ -38,7 +39,7 @@ class Batch(Base):
     schedules = relationship(
         "Schedule",
         secondary=schedule_batch_association,
-        back_populates="batches"  # Corrected to match Schedule.batches
+        back_populates="batches"
     )
 
 class Schedule(Base):
@@ -46,11 +47,13 @@ class Schedule(Base):
     id = Column(Integer, primary_key=True)
     message = Column(Text, nullable=False)
     type = Column(Enum(ScheduleType), nullable=False)
+    cron_expr = Column(String, nullable=True)      # e.g., "0 9 * * 1"
+    next_run = Column(DateTime, nullable=True)     # When to send next
     created_at = Column(DateTime, default=datetime.utcnow)
-    admin_id = Column(Integer, ForeignKey("users.id"))
-    admin = relationship("User", backref="schedules_created")
+    admin_id = Column(BIGINT, nullable=False)      # ← Telegram ID
+    is_active = Column(Boolean, default=True)
     batches = relationship(
         "Batch",
         secondary=schedule_batch_association,
-        back_populates="schedules"  # Corrected to match Batch.schedules
+        back_populates="schedules"
     )
