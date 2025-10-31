@@ -1,5 +1,5 @@
 from aiogram import types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from datetime import datetime
 from sqlalchemy import select
@@ -24,7 +24,7 @@ def create_batch_keyboard(batch_names: list):
     )
 
 
-@dp.message(CommandStart())
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     # Store None when no username is provided by Telegram.
@@ -62,37 +62,3 @@ async def cmd_start(message: types.Message):
             else:
                 await message.answer(f"You're already registered in batch ✅")
 
-
-@dp.message(F.text)
-async def handle_batch_selection(message: types.Message):
-    # Skip commands (messages starting with '/')
-    if message.text.startswith('/'):
-        return
-
-    user_id = message.from_user.id
-    selected_batch_name = message.text.strip()
-
-    async with AsyncSessionLocal() as session:
-        # Validate user exists
-        user_result = await session.execute(select(User).where(User.user_id == user_id))
-        user = user_result.scalar_one_or_none()
-        if not user:
-            await message.answer("⚠️ You are not registered. Please send /start first.")
-            return
-
-        # Fetch the batch
-        batch_result = await session.execute(select(Batch).where(Batch.name == selected_batch_name))
-        batch = batch_result.scalar_one_or_none()
-
-        if not batch:
-            await message.answer("⚠️ Invalid batch selection. Please select from the keyboard.")
-            return
-
-        if user.batch_id == batch.id:
-            await message.answer(f"✅ You are already assigned to {batch.name} batch.", reply_markup=ReplyKeyboardRemove())
-            return
-
-        # Assign batch
-        user.batch_id = batch.id
-        await session.commit()
-        await message.answer(f"✅ You’ve been assigned to {batch.name} batch!" , reply_markup=ReplyKeyboardRemove())
