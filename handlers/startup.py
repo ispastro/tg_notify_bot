@@ -4,6 +4,8 @@ from sqlalchemy import select
 
 BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
 
+
+
 async def seed_batches():
     """Ensure all batches exist in the DB."""
     async with AsyncSessionLocal() as session:
