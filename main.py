@@ -1,24 +1,16 @@
 # main.py
 import asyncio
-import logging
 from loader import bot, dp
-
-# Import modules → runs decorators → registers handlers
-import handlers.startup     # if seed_batches is here
 import handlers.users
 import handlers.admin
-
-# OR if seed_batches is in startup.py:
-# from handlers.startup import seed_batches
+import handlers.schedule
+from handlers.startup import seed_batches  # ← MUST IMPORT
 
 async def main():
-    logging.basicConfig(level=logging.DEBUG)  # See all incoming messages
-
-    # Call seed if in start.py
-    from handlers.startup import seed_batches
-    await seed_batches()
-
-    print("Bot starting with admin handlers registered...")
+    from services.scheduler import scheduler_loop
+    await seed_batches()  # ← RUNS ON STARTUP
+    asyncio.create_task(scheduler_loop(bot))
+    print("Bot starting...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
