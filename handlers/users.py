@@ -23,7 +23,7 @@ class RegisterStates(StatesGroup):
 # ──────────────────────────────────────────────────────────────
 # BATCH CONFIG (MATCH startup.py)
 # ──────────────────────────────────────────────────────────────
-BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "6th Year"]
 
 
 # ──────────────────────────────────────────────────────────────

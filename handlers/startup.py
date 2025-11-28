@@ -2,7 +2,7 @@ from db.session import AsyncSessionLocal
 from db.models import Batch
 from sqlalchemy import select
 
-BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year","5th Year", "6th Year"]
 
 
 

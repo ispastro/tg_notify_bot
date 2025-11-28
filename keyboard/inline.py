@@ -6,7 +6,7 @@ def get_batch_keyboard(batches: list[Batch], selected: list[int] | None = None):
     selected = selected or []
     buttons = []
     for b in batches:
-        prefix = "Selected" if b.id in selected else "Not Selected"
+        prefix = "Selected" if b.id in selected else " Select"
         buttons.append([
             types.InlineKeyboardButton(
                 text=f"{prefix} {b.name}",

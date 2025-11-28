@@ -11,13 +11,15 @@ from config import SUPER_ADMIN_ID
 from keyboard.user_count import total_users_keyboard
 from services.admin_services import get_user_by_username, promote_user_to_admin
 from keyboard.add_admin import add_admin_keyboard
+from aiogram.filters import Command, StateFilter
 
 print("handlers.admin loaded")
 
 logger = logging.getLogger(__name__)
 
 # --- SAFE: Log only NON-COMMANDS (FIXED!) ---
-@dp.message(~F.text.startswith("/"))
+# Only log when user has NO active FSM state
+@dp.message(~F.text.startswith("/"), StateFilter(None))
 async def _log_non_commands(message: types.Message):
     logger.debug(
         "Non-command: from=%s username=%s text=%s",
@@ -25,7 +27,6 @@ async def _log_non_commands(message: types.Message):
         message.from_user.username,
         (message.text[:100] if message.text else "no text")
     )
-
 
 @dp.message(Command("add_admin"))
 async def cmd_add_admin(message: types.Message):
@@ -153,11 +154,9 @@ async def cmd_whoami(message: types.Message):
     await message.answer(
         "<b>Your Info</b>\n"
         "• ID: <code>{}</code>\n"
-        "• Username: @{}\n"
-        "• In DB: <code>{}</code>\n"
-        "• is_admin: <code>{}</code>\n"
-        "• SUPER_ADMIN_ID: <code>{}</code>".format(
-            user_id, username, in_db, is_admin, SUPER_ADMIN_ID
+        "• Username: @{}\n".format(
+            username
         ),
+    
         parse_mode="HTML"
     )
