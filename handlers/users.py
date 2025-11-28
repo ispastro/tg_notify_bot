@@ -44,55 +44,67 @@ def create_batch_keyboard():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    username = message.from_user.username
+    username = message.from_user.username or "Unknown"
+    full_name = message.from_user.full_name
 
     async with AsyncSessionLocal() as session:
-        # Check if user exists
+        # Check if user exists in DB
         result = await session.execute(select(User).where(User.user_id == user_id))
         user = result.scalar_one_or_none()
 
+        # Create user if not exists (e.g. after block/unblock)
         if not user:
-            # Create new user
             user = User(
                 user_id=user_id,
                 username=username,
-                is_admin=(user_id == SUPER_ADMIN_ID),
-                join_date=datetime.utcnow()
+                full_name=full_name,
+                is_admin=(user_id == SUPER_ADMIN_ID),  # Only SUPER_ADMIN_ID gets is_admin=True
+                join_date=datetime.utcnow(),
+                batch_id=None
             )
             session.add(user)
             await session.commit()
+            await session.refresh(user)
 
-            if user.is_admin:
-                await message.answer(
-                    "Welcome, Super Admin. You have full privileges.\n\n"
-                    "Use /schedule to create broadcasts.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return
+        # ───── ADMIN GREETING LOGIC ─────
+        if user.is_admin:
+            if user_id == SUPER_ADMIN_ID:
+                greeting = "Welcome back, <b>Super Admin</b>!\nYou have full control over the bot."
+            else:
+                greeting = "Welcome back, <b>Admin</b>!\nYou have elevated privileges."
 
-        # User exists — check batch
-        if not user.batch_id:
             await message.answer(
-                "Welcome! Please select your batch:",
-                reply_markup=create_batch_keyboard()
-            )
-            await state.set_state(RegisterStates.choosing_batch)
-        else:
-            # Already has batch
-            batch_result = await session.execute(
-                select(Batch.name).where(Batch.id == user.batch_id)
-            )
-            batch_name = batch_result.scalar_one()
-            await message.answer(
-                f"Welcome back!\n"
-                f"You're in batch: <b>{batch_name}</b>\n\n"
-                f"• /my_batch — View batch\n"
-                f"• /edit_batch — Change batch",
+                f"{greeting}\n\nUse /schedule to send broadcasts.",
                 parse_mode="HTML",
                 reply_markup=ReplyKeyboardRemove()
             )
+            return  # Admins skip batch selection entirely
 
+        # ───── REGULAR USER FLOW ─────
+        if not user.batch_id:
+            await message.answer(
+                f"Hello{', ' + full_name if full_name else ''}!\n\n"
+                "Please select your batch to get started:",
+                reply_markup=create_batch_keyboard()
+            )
+            await state.set_state(RegisterStates.choosing_batch)
+            return
 
+        # User has batch → normal welcome
+        batch_result = await session.execute(
+            select(Batch.name).where(Batch.id == user.batch_id)
+        )
+        batch_name = batch_result.scalar_one()
+
+        await message.answer(
+            f"Welcome back, {full_name}!\n"
+            f"You're in batch: <b>{batch_name}</b>\n\n"
+            "• /my_batch — View your batch\n"
+            "• /edit_batch — Change batch",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        await state.clear()
 # ──────────────────────────────────────────────────────────────
 # /my_batch — SHOW CURRENT BATCH
 # ──────────────────────────────────────────────────────────────
