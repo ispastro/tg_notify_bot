@@ -26,7 +26,7 @@ async def set_admin_commands(bot: Bot):
         BotCommand(command="list_schedules", description="📋 Manage Schedules"),
         BotCommand(command="total_users", description="📊 View Stats"),
         BotCommand(command="add_admin", description="👮 Add Admin"),
-        BotCommand(command="whoami", description="👤 Admin Info"),
+        BotCommand(command="whoami", description="View profile info"),
     ]
 
     async with AsyncSessionLocal() as session:

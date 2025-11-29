@@ -15,23 +15,6 @@ async def start_web_server():
     app = web.Application()
     app.router.add_get("/", health_check)
     runner = web.AppRunner(app)
-# main.py
-import asyncio
-import os
-from aiohttp import web
-from loader import bot, dp
-import handlers.users
-import handlers.admin
-import handlers.schedule
-from handlers.startup import seed_batches
-
-async def health_check(request):
-    return web.Response(text="Bot is alive!", status=200)
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
