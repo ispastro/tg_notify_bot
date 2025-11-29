@@ -179,7 +179,6 @@ async def process_batch(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.edit_reply_markup(reply_markup=get_batch_keyboard(batches, selected))
 
-
 @dp.callback_query(F.data == "done_batches")
 async def done_batches(callback: types.CallbackQuery, state: FSMContext):
     if not await ensure_user_exists(callback.from_user.id):
@@ -191,11 +190,13 @@ async def done_batches(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Please select at least one batch.", show_alert=True)
         return
 
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Choose schedule type:", reply_markup=get_schedule_type_keyboard())
+    # Remove old keyboard + send new message in ONE clean action
+    await callback.message.edit_text(
+        "Batches selected!\n\nNow choose the schedule type:",
+        reply_markup=get_schedule_type_keyboard()
+    )
+
     await state.set_state(ScheduleStates.choosing_type)
-
-
 # ----------------------------------------------------------------------
 # TYPE → DATE
 # ----------------------------------------------------------------------

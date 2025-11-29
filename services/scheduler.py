@@ -21,16 +21,19 @@ MESSAGES_PER_MINUTE_TO_CHAT = 20  # Private chat limit
 BURST = 25                        # Allow short bursts
 
 # OUR SAFE LIMITS (slightly below Telegram's to stay safe)
-RATE_LIMIT_PER_SECOND = 28
+RATE_LIMIT_PER_SECOND = 25
 DELAY_BETWEEN_MESSAGES = 1.0 / RATE_LIMIT_PER_SECOND
 
 # CONCURRENCY CONTROL
-MAX_CONCURRENT_SENDS = 15         # 15 concurrent sends = ~420 msg/sec burst-safe
-MAX_USERS_PER_SCHEDULE_BATCH = 500  # Split huge schedules into chunks
+MAX_CONCURRENT_SENDS = 25         # 25 concurrent sends = safe burst
+MAX_USERS_PER_SCHEDULE_BATCH = 1000  # Process in chunks of 1000
 
 # RETRY FOR TEMPORARY FAILURES
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
+
+# TRACK RUNNING SCHEDULES (Prevent duplicates)
+running_schedules = set()
 
 
 async def send_safe(bot: Bot, user_id: int, text: str) -> bool:
@@ -44,7 +47,8 @@ async def send_safe(bot: Bot, user_id: int, text: str) -> bool:
                 disable_web_page_preview=True,
                 disable_notification=False
             )
-            await asyncio.sleep(DELAY_BETWEEN_MESSAGES)  # Respect global rate limit
+            # Simple rate limiting: sleep a tiny bit to avoid hitting global limits too hard
+            await asyncio.sleep(DELAY_BETWEEN_MESSAGES)
             return True
 
         except TelegramForbiddenError:
@@ -88,42 +92,53 @@ async def broadcast_to_chunk(bot: Bot, user_ids: list[int], message: str):
     await asyncio.gather(*[send_to_one(uid) for uid in user_ids], return_exceptions=True)
 
 
-async def run_schedule(bot: Bot, sched: Schedule):
-    """Execute one schedule — split into chunks if too big."""
-    logger.info(f"Executing schedule #{sched.id} | Type: {sched.type.value} | Users: ?")
+async def execute_schedule_logic(bot: Bot, sched_id: int):
+    """Actual execution logic, running in background."""
+    logger.info(f"Starting execution of schedule #{sched_id}")
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            # Re-fetch schedule to ensure we have fresh data attached to this session
+            sched = await session.get(Schedule, sched_id)
+            if not sched or not sched.is_active:
+                logger.warning(f"Schedule #{sched_id} no longer active or found. Aborting.")
+                return
 
-    async with AsyncSessionLocal() as session:
-        # Get all user_ids from linked batches
-        result = await session.execute(
-            select(User.user_id).select_from(
-                User.__table__.join(
-                    schedule_batch_association,
-                User.batch_id == schedule_batch_association.c.batch_id
+            # Get all user_ids from linked batches
+            result = await session.execute(
+                select(User.user_id).select_from(
+                    User.__table__.join(
+                        schedule_batch_association,
+                        User.batch_id == schedule_batch_association.c.batch_id
+                    )
+                ).where(schedule_batch_association.c.schedule_id == sched.id)
             )
-            ).where(schedule_batch_association.c.schedule_id == sched.id)
-        )
-        user_ids = [row[0] for row in result.fetchall()]
+            user_ids = [row[0] for row in result.fetchall()]
 
-        if not user_ids:
-            logger.info(f"No users for schedule #{sched.id}")
-            return
+            if not user_ids:
+                logger.info(f"No users for schedule #{sched.id}")
+            else:
+                logger.info(f"Sending schedule #{sched.id} to {len(user_ids)} users")
+                # Split into chunks
+                for i in range(0, len(user_ids), MAX_USERS_PER_SCHEDULE_BATCH):
+                    chunk = user_ids[i:i + MAX_USERS_PER_SCHEDULE_BATCH]
+                    logger.info(f"Schedule #{sched_id}: Processing chunk {i//MAX_USERS_PER_SCHEDULE_BATCH + 1} ({len(chunk)} users)")
+                    await broadcast_to_chunk(bot, chunk, sched.message)
 
-        logger.info(f"Sending schedule #{sched.id} to {len(user_ids)} users")
-
-        # Split into chunks to avoid memory explosion
-        for i in range(0, len(user_ids), MAX_USERS_PER_SCHEDULE_BATCH):
-            chunk = user_ids[i:i + MAX_USERS_PER_SCHEDULE_BATCH]
-            logger.info(f"Sending chunk {i//MAX_USERS_PER_SCHEDULE_BATCH + 1} ({len(chunk)} users)")
-            await broadcast_to_chunk(bot, chunk, sched.message)
-
-        # === UPDATE next_run ===
-        try:
+            # === UPDATE next_run ===
             now = datetime.utcnow()
+            next_run = None
+            
             if sched.type == ScheduleType.CUSTOM and sched.cron_expr:
-                cron = croniter.croniter(sched.cron_expr, now)
-                next_run = cron.get_next(datetime)
+                try:
+                    cron = croniter.croniter(sched.cron_expr, now)
+                    next_run = cron.get_next(datetime)
+                except Exception as e:
+                    logger.error(f"Invalid cron for schedule #{sched.id}: {e}")
+                    
             elif sched.type == ScheduleType.WEEKLY:
                 next_run = now + timedelta(weeks=1)
+                
             elif sched.type == ScheduleType.MONTHLY:
                 # Proper monthly: same day next month
                 try:
@@ -133,8 +148,8 @@ async def run_schedule(bot: Bot, sched: Schedule):
                 except ValueError:  # Feb 30 → go to March
                     next_run = now + timedelta(days=40)
                     next_run = next_run.replace(day=1)
-            else:  # CUSTOM without cron → one-time
-                next_run = None  # Will be deactivated
+            
+            # If no next_run (e.g. one-time custom), it remains None
 
             stmt = update(Schedule).where(Schedule.id == sched.id)
             if next_run:
@@ -144,20 +159,27 @@ async def run_schedule(bot: Bot, sched: Schedule):
 
             await session.execute(stmt)
             await session.commit()
+            
             status = "one-time completed" if not next_run else f"next: {next_run}"
-            logger.info(f"Schedule #{sched.id} completed — {status}")
+            logger.info(f"Schedule #{sched.id} FINISHED — {status}")
 
-        except Exception as e:
-            logger.error(f"Failed to update schedule #{sched.id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"CRITICAL FAILURE in schedule #{sched_id}: {e}", exc_info=True)
+    finally:
+        # ALWAYS remove from running set
+        running_schedules.discard(sched_id)
+        logger.info(f"Schedule #{sched_id} removed from running set")
 
 
 async def scheduler_loop(bot: Bot):
-    """Main loop — runs every 30 seconds (better precision)."""
-    logger.info("Scheduler loop STARTED — bulletproof mode activated")
+    """Main loop — runs every 10 seconds."""
+    logger.info("Scheduler loop STARTED — Non-blocking Mode")
+    
     while True:
         try:
             now = datetime.utcnow()
             async with AsyncSessionLocal() as session:
+                # Find schedules that are active and due
                 result = await session.execute(
                     select(Schedule).where(
                         Schedule.is_active == True,
@@ -166,15 +188,17 @@ async def scheduler_loop(bot: Bot):
                 )
                 schedules = result.scalars().all()
 
-                if schedules:
-                    logger.info(f"{len(schedules)} schedule(s) ready to execute")
-                    await asyncio.gather(*[run_schedule(bot, s) for s in schedules], return_exceptions=True)
-                else:
-                    await asyncio.sleep(30)  # Check every 30 seconds
-                    continue
+                for sched in schedules:
+                    if sched.id in running_schedules:
+                        # Already running, skip
+                        continue
+                    
+                    # Mark as running and launch background task
+                    running_schedules.add(sched.id)
+                    asyncio.create_task(execute_schedule_logic(bot, sched.id))
+
+            await asyncio.sleep(10)  # Check every 10 seconds
 
         except Exception as e:
-            logger.critical(f"SCHEDULER CRASHED: {e}", exc_info=True)
-            await asyncio.sleep(60)  # Don't spam on crash
-
-        await asyncio.sleep(30)  # Main loop tick
+            logger.critical(f"SCHEDULER LOOP CRASHED: {e}", exc_info=True)
+            await asyncio.sleep(30)  # Backoff on crash
