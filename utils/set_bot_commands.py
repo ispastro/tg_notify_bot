@@ -9,12 +9,12 @@ logger = logging.getLogger(__name__)
 
 async def set_default_commands(bot: Bot):
     """Set default commands for ALL users."""
-    user_commands = [
-        BotCommand(command="start", description="Restart / Select Batch"),
-        BotCommand(command="my_batch", description="View current batch"),
-        BotCommand(command="edit_batch", description="Change batch"),
-        BotCommand(command="whoami", description="View profile info"),
-    ]
+   commands = [
+    BotCommand(command="start", description="🚀 Restart"),        # Rocket = fresh start / launch
+    BotCommand(command="my_batch", description="🗂️ View batch"),   # Folder = collection/batch
+    BotCommand(command="edit_batch", description="🛠️ Change batch"), # Hammer/Wrench = edit/modify
+    BotCommand(command="whoami", description="🧑‍💼 View profile"),  # Person with briefcase = profile info
+]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     logger.info("Default commands set.")
 
