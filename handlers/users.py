@@ -57,7 +57,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
             user = User(
                 user_id=user_id,
                 username=username,
-                full_name=full_name,
                 is_admin=(user_id == SUPER_ADMIN_ID),  # Only SUPER_ADMIN_ID gets is_admin=True
                 join_date=datetime.utcnow(),
                 batch_id=None
@@ -105,6 +104,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
             reply_markup=ReplyKeyboardRemove()
         )
         await state.clear()
+
+
 # ──────────────────────────────────────────────────────────────
 # /my_batch — SHOW CURRENT BATCH
 # ──────────────────────────────────────────────────────────────
