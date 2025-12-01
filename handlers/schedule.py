@@ -178,12 +178,30 @@ async def process_batch(callback: types.CallbackQuery, state: FSMContext):
         batches = (await session.execute(select(Batch))).scalars().all()
 
     await callback.message.edit_reply_markup(reply_markup=get_batch_keyboard(batches, selected))
-
+#the done button
 @dp.callback_query(F.data == "done_batches")
 async def done_batches(callback: types.CallbackQuery, state: FSMContext):
     if not await ensure_user_exists(callback.from_user.id):
         await callback.answer("No permission.", show_alert=True)
         return
+
+    data = await state.get_data()
+    selected_batches = data.get("batches", [])
+
+    if not selected_batches:
+        await callback.answer("Please select at least one batch!", show_alert=True)
+        return
+
+    # Success: at least one batch selected
+    await callback.answer()  # Remove loading spinner
+
+    # Show how many batches selected + proceed
+    await callback.message.edit_text(
+        f"Selected batches: {len(selected_batches)}\n\nNow choose the schedule type:",
+        reply_markup=get_schedule_type_keyboard()
+    )
+
+    await state.set_state(ScheduleStates.choosing_type)
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.entering_message)
 async def process_message(message: types.Message, state: FSMContext):
