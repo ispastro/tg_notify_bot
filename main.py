@@ -11,9 +11,14 @@ from handlers.startup import seed_batches
 async def health_check(request):
     return web.Response(text="Bot is alive!", status=200)
 
+async def ping(request):
+    return web.Response(text="Pong!", status=200)
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", health_check)
+
+    app.router.add_get("/ping", ping)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 8080))
