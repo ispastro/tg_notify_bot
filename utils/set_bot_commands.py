@@ -23,7 +23,8 @@ async def set_admin_commands(bot: Bot):
     admin_commands = [
         BotCommand(command="start", description="🚀 Restart"),
         BotCommand(command="schedule", description="📅 Create Schedule"),
-        BotCommand(command="list_schedules", description="📋 Manage Schedules"),
+        BotCommand(command="manage_schedules", description="⚙️ Manage Schedules"),
+        BotCommand(command="list_schedules", description="📋 List All Schedules"),
         BotCommand(command="total_users", description="📊 View Stats"),
         BotCommand(command="add_admin", description="👮 Add Admin"),
         BotCommand(command="whoami", description="🧑‍💼 View profile"),

@@ -6,6 +6,7 @@ services:
     startCommand: python main.py
     plan: free
     autoDeploy: true
+    healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
