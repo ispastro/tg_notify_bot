@@ -51,3 +51,18 @@ async def promote_user_to_admin(user: User) -> bool:
         return True
 
     return await _execute_with_retry(_update)
+
+async def demote_admin(user: User) -> bool:
+    if not user or not user.is_admin:
+        return False
+
+    async def _update(session):
+        await session.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(is_admin=False)
+        )
+        await session.commit()
+        return True
+
+    return await _execute_with_retry(_update)
