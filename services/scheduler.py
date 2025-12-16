@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from db.session import AsyncSessionLocal
 from db.models import Schedule, User, ScheduleType, schedule_batch_association
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update
 import croniter
 
 logger = logging.getLogger("scheduler")
@@ -14,118 +15,211 @@ handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(messag
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-# TELEGRAM LIMITS (2025)
-MESSAGES_PER_SECOND = 30          # Global bot limit
-MESSAGES_PER_SECOND_TO_USER = 20  # Per-user limit
-MESSAGES_PER_MINUTE_TO_CHAT = 20  # Private chat limit
-BURST = 25                        # Allow short bursts
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+TELEGRAM_GLOBAL_LIMIT = 30.0  # Messages per second (Global)
+SAFE_GLOBAL_LIMIT = 25.0      # Our target safe limit
+WORKER_COUNT = 30             # Number of concurrent workers (enough to saturate the limit)
+MAX_RETRIES = 5               # Robust retry count
+BASE_RETRY_DELAY = 2.0        # Initial retry delay
+MAX_QUEUE_SIZE = 50000        # Safety cap for memory
 
-# OUR SAFE LIMITS (slightly below Telegram's to stay safe)
-RATE_LIMIT_PER_SECOND = 25
-DELAY_BETWEEN_MESSAGES = 1.0 / RATE_LIMIT_PER_SECOND
+# ==============================================================================
+# RATE LIMITER (Token Bucket)
+# ==============================================================================
+class TokenBucket:
+    """
+    A robust token bucket rate limiter for global throughput control.
+    Ensures we never exceed 'rate' actions per second across all workers.
+    """
+    def __init__(self, rate: float):
+        self.rate = rate
+        self.tokens = rate  # Start full
+        self.last_update = time.monotonic()
+        self.lock = asyncio.Lock()
 
-# CONCURRENCY CONTROL
-MAX_CONCURRENT_SENDS = 25         # 25 concurrent sends = safe burst
-MAX_USERS_PER_SCHEDULE_BATCH = 1000  # Process in chunks of 1000
+    async def acquire(self):
+        """Wait until a token is available, then consume it."""
+        async with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            # Refill tokens
+            new_tokens = elapsed * self.rate
+            if new_tokens > 0:
+                self.tokens = min(self.rate, self.tokens + new_tokens)
+                self.last_update = now
 
-# RETRY FOR TEMPORARY FAILURES
-MAX_RETRIES = 3
-RETRY_DELAY = 5  # seconds
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                return
+            
+            # Calculate wait time
+            wait_time = (1.0 - self.tokens) / self.rate
+            
+            # Reserve the token (consume it effectively in the future)
+            self.tokens = 0.0
+            self.last_update += wait_time # Advance logical time
+            
+        # Wait outside the lock to allow other acquirers to queue effectively
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
-# TRACK RUNNING SCHEDULES (Prevent duplicates)
-running_schedules = set()
 
+# ==============================================================================
+# BROADCAST MANAGER
+# ==============================================================================
+class BroadcastManager:
+    """
+    Manages the queueing and safe delivery of messages to thousands of users.
+    Uses a worker pool pattern to handle high concurrency while respecting limits.
+    """
+    def __init__(self, bot: Bot):
+        self.bot = bot
+        self.queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.limiter = TokenBucket(rate=SAFE_GLOBAL_LIMIT)
+        self.workers = []
+        self.running = False
+        self.total_enqueued = 0
+        self.total_sent = 0
 
-async def send_safe(bot: Bot, user_id: int, text: str) -> bool:
-    """Send with retry + smart error handling + rate limit."""
-    for attempt in range(MAX_RETRIES + 1):
+    def start(self):
+        """Start the worker pool."""
+        if self.running:
+            return
+        self.running = True
+        self.workers = [asyncio.create_task(self._worker(i)) for i in range(WORKER_COUNT)]
+        logger.info(f"BroadcastManager STARTED with {WORKER_COUNT} workers.")
+
+    async def stop(self):
+        """Gracefully stop workers (wait for queue to empty? No, hard stop for now)."""
+        self.running = False
+        # In a real shutdown, we might wait for join(), but for bot reload we just cancel
+        for w in self.workers:
+            w.cancel()
+        logger.info("BroadcastManager STOPPED.")
+
+    async def enqueue_job(self, user_id: int, message: str, sched_id: int):
+        """Add a job to the queue. Non-blocking unless queue is full."""
         try:
-            await bot.send_message(
-                chat_id=user_id,
-                text=text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                disable_notification=False
-            )
-            # Simple rate limiting: sleep a tiny bit to avoid hitting global limits too hard
-            await asyncio.sleep(DELAY_BETWEEN_MESSAGES)
-            return True
+            self.queue.put_nowait((user_id, message, sched_id))
+            self.total_enqueued += 1
+            if self.total_enqueued % 1000 == 0:
+                logger.info(f"Queue Stats: size={self.queue.qsize()}, total_enqueued={self.total_enqueued}")
+        except asyncio.QueueFull:
+            logger.warning("Broadcast queue FULL! Waiting to enqueue...")
+            await self.queue.put((user_id, message, sched_id))
 
-        except TelegramForbiddenError:
-            logger.info(f"User {user_id} blocked the bot — removing from future sends")
-            # Optional: mark user as blocked in DB
-            return False
+    async def _worker(self, worker_id: int):
+        """Worker loop processing messages from queue."""
+        while self.running:
+            try:
+                user_id, text, sched_id = await self.queue.get()
+                
+                # Enforce Rate Limit
+                await self.limiter.acquire()
+                
+                # Send
+                success = await self._send_safe(user_id, text)
+                
+                if success:
+                    self.total_sent += 1
+                
+                self.queue.task_done()
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Worker {worker_id} crash: {e}", exc_info=True)
+                await asyncio.sleep(1) # Prevent tight loop crash
 
-        except TelegramBadRequest as e:
-            if "chat not found" in str(e) or "user is deactivated" in str(e):
-                logger.info(f"User {user_id} deactivated — skipping")
-                return False
-            # Other BadRequest → retry
-            logger.warning(f"BadRequest to {user_id} (attempt {attempt+1}): {e}")
+    async def _send_safe(self, user_id: int, text: str) -> bool:
+        """Robust send with retry logic."""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                return True
 
-        except TelegramAPIError as e:
-            if "Too Many Requests" in str(e):
-                retry_after = getattr(e, "retry_after", 10)
-                logger.warning(f"Flood control! Sleeping {retry_after + 5}s")
-                await asyncio.sleep(retry_after + 5)
+            except TelegramRetryAfter as e:
+                # We hit a limit despite our bucket. Respect Telegram's wish.
+                wait_s = e.retry_after
+                logger.warning(f"FloodWait: Sleeping {wait_s}s for user {user_id}")
+                await asyncio.sleep(wait_s)
+                # Retry immediately after waiting
                 continue
-            logger.warning(f"Telegram error to {user_id}: {e}")
 
-        except Exception as e:
-            logger.error(f"Unexpected error to {user_id}: {e}", exc_info=True)
+            except TelegramForbiddenError:
+                # Blocked
+                return False
 
-        if attempt < MAX_RETRIES:
-            await asyncio.sleep(RETRY_DELAY * (2 ** attempt))  # Exponential backoff
+            except TelegramBadRequest as e:
+                # Check for "chat not found"
+                if "chat not found" in str(e).lower() or "deactivated" in str(e).lower():
+                    return False
+                logger.warning(f"BadRequest to {user_id}: {e}")
+                # Don't retry bad requests typically
+                return False
 
-    return False
+            except TelegramAPIError as e:
+                logger.warning(f"API Error to {user_id} (Attempt {attempt+1}/{MAX_RETRIES}): {e}")
+
+            except Exception as e:
+                logger.error(f"Unexpected error to {user_id}: {e}")
+
+            # Exponential Backoff for retries
+            if attempt < MAX_RETRIES:
+                sleep_time = BASE_RETRY_DELAY * (2 ** attempt)
+                await asyncio.sleep(sleep_time)
+
+        logger.error(f"Failed to send to {user_id} after {MAX_RETRIES} attempts.")
+        return False
 
 
-async def broadcast_to_chunk(bot: Bot, user_ids: list[int], message: str):
-    """Send to a chunk of users with concurrency control."""
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_SENDS)
-
-    async def send_to_one(uid):
-        async with semaphore:
-            await send_safe(bot, uid, message)
-
-    # Fire and forget — we don't care about individual failures
-    await asyncio.gather(*[send_to_one(uid) for uid in user_ids], return_exceptions=True)
-
+# ==============================================================================
+# SCHEDULER LOGIC
+# ==============================================================================
+running_schedules = set()
+broadcast_manager: BroadcastManager = None
 
 async def execute_schedule_logic(bot: Bot, sched_id: int):
-    """Actual execution logic, running in background."""
-    logger.info(f"Starting execution of schedule #{sched_id}")
+    """Fetches users and feeds the BroadcastManager."""
+    logger.info(f"Processing execution for Schedule #{sched_id}")
     
     try:
         async with AsyncSessionLocal() as session:
-            # Re-fetch schedule to ensure we have fresh data attached to this session
+            # 1. Fetch Schedule
             sched = await session.get(Schedule, sched_id)
             if not sched or not sched.is_active:
-                logger.warning(f"Schedule #{sched_id} no longer active or found. Aborting.")
+                logger.warning("Schedule invalid or inactive.")
                 return
 
-            # Get all user_ids from linked batches
-            result = await session.execute(
-                select(User.user_id).select_from(
-                    User.__table__.join(
-                        schedule_batch_association,
-                        User.batch_id == schedule_batch_association.c.batch_id
-                    )
-                ).where(schedule_batch_association.c.schedule_id == sched.id)
+            # 2. Fetch Users (Streaming is better for huge datasets, but list ok for <100k)
+            # Optimize: Fetch only user_id to save memory
+            stmt = select(User.user_id).join(
+                schedule_batch_association, 
+                User.batch_id == schedule_batch_association.c.batch_id
+            ).where(
+                schedule_batch_association.c.schedule_id == sched.id
             )
+            
+            result = await session.execute(stmt)
+            # Use fetchmany or iterate to avoid loading all into memory at once if millions
+            # For "thousands", fetchall is fine (10k integers is tiny)
             user_ids = [row[0] for row in result.fetchall()]
 
             if not user_ids:
-                logger.info(f"No users for schedule #{sched.id}")
+                logger.info(f"No users found for Schedule #{sched.id}")
             else:
-                logger.info(f"Sending schedule #{sched.id} to {len(user_ids)} users")
-                # Split into chunks
-                for i in range(0, len(user_ids), MAX_USERS_PER_SCHEDULE_BATCH):
-                    chunk = user_ids[i:i + MAX_USERS_PER_SCHEDULE_BATCH]
-                    logger.info(f"Schedule #{sched_id}: Processing chunk {i//MAX_USERS_PER_SCHEDULE_BATCH + 1} ({len(chunk)} users)")
-                    await broadcast_to_chunk(bot, chunk, sched.message)
+                logger.info(f"Enqueueing {len(user_ids)} messages for Schedule #{sched.id}")
+                for uid in user_ids:
+                    await broadcast_manager.enqueue_job(uid, sched.message, sched.id)
 
-            # === UPDATE next_run ===
+            # 3. Calculate Next Run
             now = datetime.utcnow()
             next_run = None
             
@@ -134,71 +228,68 @@ async def execute_schedule_logic(bot: Bot, sched_id: int):
                     cron = croniter.croniter(sched.cron_expr, now)
                     next_run = cron.get_next(datetime)
                 except Exception as e:
-                    logger.error(f"Invalid cron for schedule #{sched.id}: {e}")
-                    
+                    logger.error(f"Cron error: {e}")
             elif sched.type == ScheduleType.WEEKLY:
                 next_run = now + timedelta(weeks=1)
-                
             elif sched.type == ScheduleType.MONTHLY:
-                # Proper monthly: same day next month
+                # Simple monthly logic
+                next_run = now + timedelta(days=30) # Fallback
                 try:
-                    next_run = now.replace(month=now.month % 12 + 1)
-                    if now.month == 12:
-                        next_run = next_run.replace(year=now.year + 1)
-                except ValueError:  # Feb 30 → go to March
-                    next_run = now + timedelta(days=40)
-                    next_run = next_run.replace(day=1)
-            
-            # If no next_run (e.g. one-time custom), it remains None
+                    new_month = (now.month % 12) + 1
+                    year_add = 1 if new_month == 1 else 0
+                    next_run = now.replace(year=now.year + year_add, month=new_month)
+                except ValueError:
+                    pass
 
-            stmt = update(Schedule).where(Schedule.id == sched.id)
+            # 4. Update DB
+            values = {}
             if next_run:
-                stmt = stmt.values(next_run=next_run)
+                values["next_run"] = next_run
             else:
-                stmt = stmt.values(is_active=False)  # One-time done
-
-            await session.execute(stmt)
+                values["is_active"] = False
+            
+            await session.execute(update(Schedule).where(Schedule.id == sched.id).values(**values))
             await session.commit()
             
-            status = "one-time completed" if not next_run else f"next: {next_run}"
-            logger.info(f"Schedule #{sched.id} FINISHED — {status}")
+            logger.info(f"Schedule #{sched.id} processed. Next run: {next_run}")
 
     except Exception as e:
-        logger.error(f"CRITICAL FAILURE in schedule #{sched_id}: {e}", exc_info=True)
+        logger.error(f"Example execution failed: {e}", exc_info=True)
     finally:
-        # ALWAYS remove from running set
         running_schedules.discard(sched_id)
-        logger.info(f"Schedule #{sched_id} removed from running set")
 
 
 async def scheduler_loop(bot: Bot):
-    """Main loop — runs every 10 seconds."""
-    logger.info("Scheduler loop STARTED — Non-blocking Mode")
-    
+    """Main background loop."""
+    global broadcast_manager
+    if broadcast_manager is None:
+        broadcast_manager = BroadcastManager(bot)
+        broadcast_manager.start()
+
+    logger.info("Scheduler loop STARTED (Robust Mode)")
+
     while True:
         try:
             now = datetime.utcnow()
             async with AsyncSessionLocal() as session:
-                # Find schedules that are active and due
-                result = await session.execute(
-                    select(Schedule).where(
-                        Schedule.is_active == True,
-                        Schedule.next_run <= now
-                    )
+                # Find due schedules
+                stmt = select(Schedule).where(
+                    Schedule.is_active == True,
+                    Schedule.next_run <= now
                 )
+                result = await session.execute(stmt)
                 schedules = result.scalars().all()
 
                 for sched in schedules:
                     if sched.id in running_schedules:
-                        # Already running, skip
                         continue
                     
-                    # Mark as running and launch background task
                     running_schedules.add(sched.id)
+                    # Use create_task to run non-blocking
                     asyncio.create_task(execute_schedule_logic(bot, sched.id))
 
-            await asyncio.sleep(10)  # Check every 10 seconds
+            await asyncio.sleep(10)
 
         except Exception as e:
-            logger.critical(f"SCHEDULER LOOP CRASHED: {e}", exc_info=True)
-            await asyncio.sleep(30)  # Backoff on crash
+            logger.critical(f"Scheduler loop crash: {e}", exc_info=True)
+            await asyncio.sleep(10)
