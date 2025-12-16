@@ -202,6 +202,193 @@ async def done_batches(callback: types.CallbackQuery, state: FSMContext):
     )
 
     await state.set_state(ScheduleStates.choosing_type)
+
+
+# ----------------------------------------------------------------------
+# SCHEDULE TYPE SELECTION (MISSING HANDLER - NOW ADDED!)
+# ----------------------------------------------------------------------
+@dp.callback_query(F.data.startswith("type_"))
+async def process_schedule_type(callback: types.CallbackQuery, state: FSMContext):
+    if not await ensure_user_exists(callback.from_user.id):
+        await callback.answer("No permission.", show_alert=True)
+        return
+
+    type_map = {
+        "type_weekly": ScheduleType.WEEKLY,
+        "type_monthly": ScheduleType.MONTHLY,
+        "type_custom": ScheduleType.CUSTOM,
+    }
+
+    schedule_type = type_map.get(callback.data)
+    if not schedule_type:
+        await callback.answer("Invalid type!", show_alert=True)
+        return
+
+    await state.update_data(schedule_type=schedule_type)
+    await callback.answer()
+
+    if schedule_type == ScheduleType.CUSTOM:
+        # Custom: Ask for cron expression
+        await callback.message.edit_text(
+            "Enter a cron expression (e.g., <code>0 9 * * 1</code> for every Monday at 9 AM UTC):\n\n"
+            "Format: <code>minute hour day month weekday</code>",
+            parse_mode="HTML"
+        )
+        await state.set_state(ScheduleStates.choosing_date)  # Reuse for cron input
+    else:
+        # Weekly/Monthly: Show calendar to pick a date
+        await callback.message.edit_text(
+            f"Schedule type: <b>{schedule_type.value.title()}</b>\n\n"
+            "Now select the start date:",
+            reply_markup=create_calendar(),
+            parse_mode="HTML"
+        )
+        await state.set_state(ScheduleStates.choosing_date)
+
+
+# ----------------------------------------------------------------------
+# CALENDAR NAVIGATION
+# ----------------------------------------------------------------------
+@dp.callback_query(F.data.startswith("cal_prev_"))
+async def calendar_prev(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    year, month = int(parts[2]), int(parts[3])
+    # Go to previous month
+    if month == 1:
+        year -= 1
+        month = 12
+    else:
+        month -= 1
+    await callback.message.edit_reply_markup(reply_markup=create_calendar(year, month))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("cal_next_"))
+async def calendar_next(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    year, month = int(parts[2]), int(parts[3])
+    # Go to next month
+    if month == 12:
+        year += 1
+        month = 1
+    else:
+        month += 1
+    await callback.message.edit_reply_markup(reply_markup=create_calendar(year, month))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("cal_day_"))
+async def calendar_day_selected(callback: types.CallbackQuery, state: FSMContext):
+    if not await ensure_user_exists(callback.from_user.id):
+        await callback.answer("No permission.", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    year, month, day = int(parts[2]), int(parts[3]), int(parts[4])
+    selected_date = datetime(year, month, day)
+
+    # Check if date is in the past
+    if selected_date.date() < datetime.utcnow().date():
+        await callback.answer("Cannot select a past date!", show_alert=True)
+        return
+
+    await state.update_data(selected_date=selected_date)
+    await callback.answer()
+
+    await callback.message.edit_text(
+        f"Date selected: <b>{selected_date.strftime('%b %d, %Y')}</b>\n\n"
+        "Now select the time:",
+        reply_markup=create_time_picker(),
+        parse_mode="HTML"
+    )
+    await state.set_state(ScheduleStates.choosing_time)
+
+
+@dp.callback_query(F.data == "ignore")
+async def ignore_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+# ----------------------------------------------------------------------
+# TIME SELECTION
+# ----------------------------------------------------------------------
+@dp.callback_query(F.data.startswith("time_"))
+async def process_time_selection(callback: types.CallbackQuery, state: FSMContext):
+    if not await ensure_user_exists(callback.from_user.id):
+        await callback.answer("No permission.", show_alert=True)
+        return
+
+    hour = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    selected_date = data.get("selected_date")
+
+    if not selected_date:
+        await callback.answer("Please select a date first!", show_alert=True)
+        return
+
+    # Combine date + time
+    next_run = selected_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+    # Check if the datetime is in the past
+    if next_run <= datetime.utcnow():
+        await callback.answer("Cannot schedule in the past! Pick a future time.", show_alert=True)
+        return
+
+    await state.update_data(next_run=next_run)
+    await callback.answer()
+
+    nice_time = format_12hour(next_run)
+    await callback.message.edit_text(
+        f"Scheduled for: <b>{nice_time}</b>\n\n"
+        "Now enter the message you want to send:",
+        parse_mode="HTML"
+    )
+    await state.set_state(ScheduleStates.entering_message)
+
+
+# ----------------------------------------------------------------------
+# CRON EXPRESSION INPUT (for Custom type)
+# ----------------------------------------------------------------------
+@dp.message(ScheduleStates.choosing_date)
+async def process_cron_or_date(message: types.Message, state: FSMContext):
+    """Handle cron expression input for CUSTOM schedule type."""
+    if not await ensure_user_exists(message.from_user.id):
+        await message.answer("No permission.")
+        return
+
+    data = await state.get_data()
+    schedule_type = data.get("schedule_type")
+
+    if schedule_type == ScheduleType.CUSTOM:
+        # Validate cron expression
+        import croniter
+        try:
+            cron = croniter.croniter(message.text.strip(), datetime.utcnow())
+            next_run = cron.get_next(datetime)
+        except Exception as e:
+            await message.answer(
+                f"Invalid cron expression: <code>{message.text}</code>\n\n"
+                f"Error: {e}\n\n"
+                "Please try again with a valid cron format.",
+                parse_mode="HTML"
+            )
+            return
+
+        await state.update_data(
+            cron_expr=message.text.strip(),
+            next_run=next_run
+        )
+
+        nice_time = format_12hour(next_run)
+        await message.answer(
+            f"Cron: <code>{message.text.strip()}</code>\n"
+            f"Next run: <b>{nice_time}</b>\n\n"
+            "Now enter the message you want to send:",
+            parse_mode="HTML"
+        )
+        await state.set_state(ScheduleStates.entering_message)
+
+
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.entering_message)
 async def process_message(message: types.Message, state: FSMContext):
