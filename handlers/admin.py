@@ -9,8 +9,9 @@ from db.session import AsyncSessionLocal
 from db.models import User
 from config import SUPER_ADMIN_ID
 from keyboard.user_count import total_users_keyboard
-from services.admin_services import get_user_by_username, promote_user_to_admin
+from services.admin_services import get_user_by_username, promote_user_to_admin, demote_admin
 from keyboard.add_admin import add_admin_keyboard
+from keyboard.remove_admin import remove_admin_keyboard
 from aiogram.filters import Command, StateFilter
 
 print("handlers.admin loaded")
@@ -155,3 +156,66 @@ async def cmd_whoami(message: types.Message):
         f"• Username: @{username}\n",
         parse_mode="HTML"
     )
+
+
+# --- /remove_admin command ---
+@dp.message(Command("remove_admin"))
+async def cmd_remove_admin(message: types.Message):
+    logger.info("Received /remove_admin from %s", message.from_user.id)
+    user_id = message.from_user.id
+
+    if user_id != SUPER_ADMIN_ID:
+        await message.answer("You do not have permission.", parse_mode="HTML")
+        return
+
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("Usage: <code>/remove_admin @username</code>", parse_mode="HTML")
+        return
+
+    username = parts[1].lstrip("@").strip()
+    user = await get_user_by_username(username)
+    if not user:
+        await message.answer(f"User @{username} not found.", parse_mode="HTML")
+        return
+
+    if not user.is_admin:
+        await message.answer(f"User @{username} is not an admin.", parse_mode="HTML")
+        return
+
+    await message.answer(
+        f"⚠️ Are you sure you want to <b>REMOVE admin privileges</b> from <b>@{username}</b>?",
+        reply_markup=remove_admin_keyboard(username),
+        parse_mode="HTML"
+    )
+
+
+# --- Confirm removal ---
+@dp.callback_query(F.data.startswith("confirm_remove_admin:"))
+async def confirm_remove_admin(callback: types.CallbackQuery):
+    logger.info("confirm_remove_admin from %s data=%s", callback.from_user.id, callback.data)
+
+    if callback.from_user.id != SUPER_ADMIN_ID:
+        await callback.answer("You do not have permission.", show_alert=True)
+        return
+
+    username = callback.data.split(":", 1)[1]
+    user = await get_user_by_username(username)
+    if not user:
+        await callback.answer(f"User @{username} not found.", show_alert=True)
+        return
+
+    updated = await demote_admin(user)
+    if updated:
+        await callback.message.edit_text(f"✅ Admin privileges removed from @{username}.")
+    else:
+        await callback.message.edit_text(f"@{username} is not an admin.")
+    await callback.answer()
+
+
+# --- Cancel removal ---
+@dp.callback_query(F.data.startswith("cancel_remove_admin:"))
+async def cancel_remove_admin(callback: types.CallbackQuery):
+    username = callback.data.split(":", 1)[1]
+    await callback.message.edit_text(f"Action cancelled. @{username} remains an admin.")
+    await callback.answer()
