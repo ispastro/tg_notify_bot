@@ -2,7 +2,7 @@ services:
   - type: web
     name: gibi-scheduler-bot
     env: python
-    buildCommand: pip install --upgrade pip && pip install --only-binary=all -r requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python main.py
     plan: free
     autoDeploy: true
