@@ -81,13 +81,19 @@ async def ensure_user_exists(user_id: int, username: str | None = None) -> bool:
 
 
 # ----------------------------------------------------------------------
-# 12-HOUR FORMAT HELPER
+# 12-HOUR FORMAT HELPER (Ethiopia Time = UTC+3)
 # ----------------------------------------------------------------------
 def format_12hour(dt: datetime) -> str:
-    period = "AM" if dt.hour < 12 else "PM"
-    hour = dt.hour % 12
+    """Convert UTC datetime to Ethiopia time and format as 12-hour."""
+    from datetime import timedelta
+    # Add 3 hours to convert from UTC to Ethiopia time
+    ethiopia_time = dt + timedelta(hours=3)
+    period = "AM" if ethiopia_time.hour < 12 else "PM"
+    hour = ethiopia_time.hour % 12
     hour = 12 if hour == 0 else hour
-    return f"{dt.strftime('%b %d, %Y')} at {hour}:00 {period} UTC"
+    minute = ethiopia_time.minute
+    time_str = f"{hour}:{minute:02d} {period}" if minute > 0 else f"{hour}:00 {period}"
+    return f"{ethiopia_time.strftime('%b %d, %Y')} at {time_str} (Ethiopia Time)"
 
 
 # ----------------------------------------------------------------------
@@ -253,9 +259,16 @@ async def process_schedule_type(callback: types.CallbackQuery, state: FSMContext
         if schedule_type == ScheduleType.CUSTOM:
             await callback.message.edit_text(
                 "📅 <b>Edit Type: Custom</b>\n\n"
-                "Enter a new cron expression (e.g., <code>0 9 * * 1</code>):\n"
-                "Format: <code>minute hour day month weekday</code>",
-                reply_markup=get_cancel_keyboard(0), # 0 or valid ID if I have it in data?
+                "Enter your schedule in this format:\n"
+                "<code>MINUTE HOUR DAY MONTH WEEKDAY</code>\n\n"
+                "<b>Examples:</b>\n"
+                "• <code>30 14 * * 1</code> = Every Monday at 2:30 PM\n"
+                "• <code>0 9 15 * *</code> = 15th of every month at 9:00 AM\n"
+                "• <code>45 18 * * 5</code> = Every Friday at 6:45 PM\n\n"
+                "<b>Tips:</b>\n"
+                "• Use <code>*</code> for \"any\"\n"
+                "• Weekday: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat",
+                reply_markup=get_cancel_keyboard(0),
                 parse_mode="HTML"
             )
             await state.set_state(EditScheduleStates.editing_cron)
@@ -277,13 +290,14 @@ async def process_schedule_type(callback: types.CallbackQuery, state: FSMContext
     await callback.answer()
 
     if schedule_type == ScheduleType.CUSTOM:
-        # Custom: Ask for cron expression
+        # Custom: Show calendar for date selection
         await callback.message.edit_text(
-            "Enter a cron expression (e.g., <code>0 9 * * 1</code> for every Monday at 9 AM UTC):\n\n"
-            "Format: <code>minute hour day month weekday</code>",
+            "⏰ <b>Custom Schedule</b>\n\n"
+            "Select the date:",
+            reply_markup=create_calendar(),
             parse_mode="HTML"
         )
-        await state.set_state(ScheduleStates.choosing_date)  # Reuse for cron input
+        await state.set_state(ScheduleStates.choosing_date)
     else:
         # Weekly/Monthly: Show calendar to pick a date
         await callback.message.edit_text(
@@ -346,8 +360,12 @@ async def calendar_day_selected(callback: types.CallbackQuery, state: FSMContext
 
     await callback.message.edit_text(
         f"Date selected: <b>{selected_date.strftime('%b %d, %Y')}</b>\n\n"
-        "Now select the time:",
-        reply_markup=create_time_picker(),
+        "⏰ Enter the time (12-hour format):\n\n"
+        "<b>Examples:</b>\n"
+        "• 9:00 AM\n"
+        "• 2:30 PM\n"
+        "• 6:45 PM\n"
+        "• 11:15 AM",
         parse_mode="HTML"
     )
     await state.set_state(ScheduleStates.choosing_time)
@@ -359,7 +377,68 @@ async def ignore_callback(callback: types.CallbackQuery):
 
 
 # ----------------------------------------------------------------------
-# TIME SELECTION
+# TIME SELECTION - TEXT INPUT (12-HOUR FORMAT)
+# ----------------------------------------------------------------------
+@dp.message(ScheduleStates.choosing_time)
+async def process_time_input(message: types.Message, state: FSMContext):
+    """Process 12-hour format time input (e.g., '2:30 PM')."""
+    if not await ensure_user_exists(message.from_user.id):
+        await message.answer("No permission.")
+        return
+
+    time_text = message.text.strip()
+    data = await state.get_data()
+    selected_date = data.get("selected_date")
+
+    if not selected_date:
+        await message.answer("Please select a date first using /schedule")
+        return
+
+    # Parse 12-hour format time
+    try:
+        # Try parsing formats like "2:30 PM", "9:00 AM", "11:15 pm"
+        from datetime import datetime
+        time_obj = datetime.strptime(time_text.upper(), "%I:%M %p")
+        hour = time_obj.hour
+        minute = time_obj.minute
+    except ValueError:
+        await message.answer(
+            "❌ Invalid time format!\n\n"
+            "Please use 12-hour format:\n"
+            "<b>Examples:</b>\n"
+            "• 9:00 AM\n"
+            "• 2:30 PM\n"
+            "• 6:45 PM",
+            parse_mode="HTML"
+        )
+        return
+
+    # Combine date + time (Ethiopia is UTC+3)
+    # Convert Ethiopia time to UTC for storage
+    next_run = selected_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # Subtract 3 hours to convert from Ethiopia time to UTC
+    from datetime import timedelta
+    next_run_utc = next_run - timedelta(hours=3)
+
+    # Check if the datetime is in the past
+    if next_run_utc <= datetime.utcnow():
+        await message.answer("❌ Cannot schedule in the past! Pick a future time.")
+        return
+
+    await state.update_data(next_run=next_run_utc)
+
+    # Show confirmation in Ethiopia time with proper formatting
+    ethiopia_display = format_12hour(next_run_utc)
+    await message.answer(
+        f"✅ Scheduled for: <b>{ethiopia_display}</b>\n\n"
+        "Now enter the message you want to send:",
+        parse_mode="HTML"
+    )
+    await state.set_state(ScheduleStates.entering_message)
+
+
+# ----------------------------------------------------------------------
+# TIME SELECTION - BUTTON PICKER (LEGACY - FOR WEEKLY/MONTHLY)
 # ----------------------------------------------------------------------
 @dp.callback_query(F.data.startswith("time_"))
 async def process_time_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -396,46 +475,8 @@ async def process_time_selection(callback: types.CallbackQuery, state: FSMContex
 
 
 # ----------------------------------------------------------------------
-# CRON EXPRESSION INPUT (for Custom type)
+# CRON EXPRESSION INPUT - REMOVED (Now using calendar + time input)
 # ----------------------------------------------------------------------
-@dp.message(ScheduleStates.choosing_date)
-async def process_cron_or_date(message: types.Message, state: FSMContext):
-    """Handle cron expression input for CUSTOM schedule type."""
-    if not await ensure_user_exists(message.from_user.id):
-        await message.answer("No permission.")
-        return
-
-    data = await state.get_data()
-    schedule_type = data.get("schedule_type")
-
-    if schedule_type == ScheduleType.CUSTOM:
-        # Validate cron expression
-        import croniter
-        try:
-            cron = croniter.croniter(message.text.strip(), datetime.utcnow())
-            next_run = cron.get_next(datetime)
-        except Exception as e:
-            await message.answer(
-                f"Invalid cron expression: <code>{message.text}</code>\n\n"
-                f"Error: {e}\n\n"
-                "Please try again with a valid cron format.",
-                parse_mode="HTML"
-            )
-            return
-
-        await state.update_data(
-            cron_expr=message.text.strip(),
-            next_run=next_run
-        )
-
-        nice_time = format_12hour(next_run)
-        await message.answer(
-            f"Cron: <code>{message.text.strip()}</code>\n"
-            f"Next run: <b>{nice_time}</b>\n\n"
-            "Now enter the message you want to send:",
-            parse_mode="HTML"
-        )
-        await state.set_state(ScheduleStates.entering_message)
 
 
 # ----------------------------------------------------------------------
@@ -460,7 +501,7 @@ async def process_message(message: types.Message, state: FSMContext):
         f"<b>New Schedule</b>\n\n"
         f"<b>Batches:</b> {', '.join(batch_names)}\n"
         f"<b>Type:</b> {data['schedule_type'].value.title()}\n"
-        f"<b>Send Time:</b> <code>{nice_time}</code>\n\n"
+        f"<b>Send Time:</b> {nice_time}\n\n"
         f"<b>Message:</b>\n<pre>{message.text}</pre>\n\n"
         f"Send this schedule?"
     )

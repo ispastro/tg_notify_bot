@@ -17,7 +17,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # === SET DATABASE URL (FOR OFFLINE MODE) ===
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# Escape % characters for ConfigParser
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace('%', '%%'))
 
 # === OFFLINE MODE (unchanged) ===
 def run_migrations_offline() -> None:
