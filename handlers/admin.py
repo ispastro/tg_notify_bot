@@ -172,8 +172,13 @@ async def cmd_total_users(message: types.Message):
         count_result = await session.execute(select(func.count(User.id)))
         total_users = count_result.scalar_one()
 
+    # Format time in user-friendly way for Ethiopians
+    now = datetime.now()
+    time_str = now.strftime('%I:%M %p')  # 2:37 PM format
+    date_str = now.strftime('%b %d, %Y')  # Mar 28, 2026 format
+
     await message.answer(
-        f"Total registered users: {total_users}\nLast updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Total registered users: {total_users}\nUpdated: {time_str} on {date_str}",
         reply_markup=total_users_keyboard()
     )
 
@@ -196,8 +201,13 @@ async def refresh_total_users(callback_query: types.CallbackQuery):
         count_result = await session.execute(select(func.count(User.id)))
         total_users = count_result.scalar_one()
 
+    # Format time in user-friendly way for Ethiopians
+    now = datetime.now()
+    time_str = now.strftime('%I:%M %p')  # 2:37 PM format
+    date_str = now.strftime('%b %d, %Y')  # Mar 28, 2026 format
+
     await callback_query.message.edit_text(
-        f"Total registered users: {total_users}\nLast updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Total registered users: {total_users}\nUpdated: {time_str} on {date_str}",
         reply_markup=total_users_keyboard()
     )
     await callback_query.answer("Updated!")
