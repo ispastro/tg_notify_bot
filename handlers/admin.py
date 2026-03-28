@@ -206,20 +206,28 @@ async def refresh_total_users(callback_query: types.CallbackQuery):
 @dp.message(Command("whoami"))
 async def cmd_whoami(message: types.Message):
     user_id = message.from_user.id
-    username = message.from_user.username or "None"
+    username = message.from_user.username or "Not set"
     logger.info("whoami invoked by %s (@%s)", user_id, username)
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.user_id == user_id))
         user = result.scalar_one_or_none()
 
-    in_db = bool(user)
-    is_admin = user.is_admin if user else False
+    if not user:
+        await message.answer(
+            "👤 <b>Profile</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"📛 Username: @{username}\n\n"
+            "Use /start to register.",
+            parse_mode="HTML"
+        )
+        return
 
     await message.answer(
-        f"<b>Your Info</b>\n"
-        f"• ID: <code>{user_id}</code>\n"
-        f"• Username: @{username}\n",
+        "👤 <b>Your Profile</b>\n\n"
+        f"📛 Name: <b>{user.full_name or 'Not set'}</b>\n"
+        f"🔖 Username: @{username}\n"
+        f"⚧ Gender: {user.gender or 'Not set'}",
         parse_mode="HTML"
     )
 
