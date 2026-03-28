@@ -22,6 +22,12 @@ class RegisterStates(StatesGroup):
     choosing_batch = State()
 
 
+class EditProfileStates(StatesGroup):
+    choosing_field = State()
+    entering_new_name = State()
+    choosing_new_gender = State()
+
+
 # ──────────────────────────────────────────────────────────────
 # BATCH CONFIG (MATCH startup.py)
 # ──────────────────────────────────────────────────────────────
@@ -327,3 +333,123 @@ async def cmd_my_profile(message: types.Message):
 # ──────────────────────────────────────────────────────────────
 # /my_batch — SHOW CURRENT BATCH
 # ──────────────────────────────────────────────────────────────
+
+
+# ──────────────────────────────────────────────────────────────
+# /edit_profile — EDIT NAME OR GENDER
+# ──────────────────────────────────────────────────────────────
+@dp.message(Command("edit_profile"))
+async def cmd_edit_profile(message: types.Message, state: FSMContext):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await message.answer("Use /start first.")
+            return
+
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📛 Edit Name", callback_data="edit_name")],
+            [InlineKeyboardButton(text="⚧ Edit Gender", callback_data="edit_gender")],
+            [InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")]
+        ])
+
+        await message.answer(
+            "✏️ <b>Edit Profile</b>\n\n"
+            f"Current Name: <b>{user.full_name or 'Not set'}</b>\n"
+            f"Current Gender: {user.gender or 'Not set'}\n\n"
+            "What would you like to edit?",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+
+
+# Handle edit name button
+@dp.callback_query(F.data == "edit_name")
+async def handle_edit_name(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "📛 <b>Edit Name</b>\n\nPlease enter your new full name:",
+        parse_mode="HTML"
+    )
+    await state.set_state(EditProfileStates.entering_new_name)
+    await callback.answer()
+
+
+# Handle edit gender button
+@dp.callback_query(F.data == "edit_gender")
+async def handle_edit_gender(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await callback.message.answer(
+        "⚧ <b>Edit Gender</b>\n\nPlease select your gender:",
+        reply_markup=create_gender_keyboard(),
+        parse_mode="HTML"
+    )
+    await state.set_state(EditProfileStates.choosing_new_gender)
+    await callback.answer()
+
+
+# Handle cancel button
+@dp.callback_query(F.data == "edit_cancel")
+async def handle_edit_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("❌ Profile edit cancelled.")
+    await state.clear()
+    await callback.answer()
+
+
+# Process new name input
+@dp.message(EditProfileStates.entering_new_name)
+async def process_new_name(message: types.Message, state: FSMContext):
+    new_name = message.text.strip()
+
+    if len(new_name) < 2:
+        await message.answer("Please enter a valid full name (at least 2 characters).")
+        return
+
+    if len(new_name) > 100:
+        await message.answer("Name is too long. Please enter a shorter name.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(full_name=new_name)
+        )
+        await session.commit()
+
+    await message.answer(
+        f"✅ <b>Name Updated!</b>\n\nYour new name: <b>{new_name}</b>",
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.clear()
+
+
+# Process new gender selection
+@dp.message(EditProfileStates.choosing_new_gender)
+async def process_new_gender(message: types.Message, state: FSMContext):
+    new_gender = message.text.strip()
+
+    if new_gender not in GENDERS:
+        await message.answer(
+            "Please select a valid option from the keyboard.",
+            reply_markup=create_gender_keyboard()
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(gender=new_gender)
+        )
+        await session.commit()
+
+    await message.answer(
+        f"✅ <b>Gender Updated!</b>\n\nYour new gender: {new_gender}",
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.clear()

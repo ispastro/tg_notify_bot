@@ -8,6 +8,7 @@ from db.session import AsyncSessionLocal
 from db.models import Schedule, User, ScheduleType, schedule_batch_association
 from sqlalchemy import select, update
 import croniter
+from utils.message_utils import personalize_message
 
 logger = logging.getLogger("scheduler")
 handler = logging.StreamHandler()
@@ -99,22 +100,26 @@ class BroadcastManager:
             w.cancel()
         logger.info("BroadcastManager STOPPED.")
 
-    async def enqueue_job(self, user_id: int, message: str, sched_id: int):
+    async def enqueue_job(self, user_id: int, message: str, sched_id: int, full_name: str = None):
         """Add a job to the queue. Non-blocking unless queue is full."""
         try:
-            self.queue.put_nowait((user_id, message, sched_id))
+            self.queue.put_nowait((user_id, message, sched_id, full_name))
             self.total_enqueued += 1
             if self.total_enqueued % 1000 == 0:
                 logger.info(f"Queue Stats: size={self.queue.qsize()}, total_enqueued={self.total_enqueued}")
         except asyncio.QueueFull:
             logger.warning("Broadcast queue FULL! Waiting to enqueue...")
-            await self.queue.put((user_id, message, sched_id))
+            await self.queue.put((user_id, message, sched_id, full_name))
 
     async def _worker(self, worker_id: int):
         """Worker loop processing messages from queue."""
         while self.running:
             try:
-                user_id, text, sched_id = await self.queue.get()
+                user_id, text, sched_id, full_name = await self.queue.get()
+                
+                # Personalize message if full_name provided
+                if full_name:
+                    text = personalize_message(text, full_name)
                 
                 # Enforce Rate Limit
                 await self.limiter.acquire()
@@ -198,9 +203,8 @@ async def execute_schedule_logic(bot: Bot, sched_id: int):
                 logger.warning("Schedule invalid or inactive.")
                 return
 
-            # 2. Fetch Users (Streaming is better for huge datasets, but list ok for <100k)
-            # Optimize: Fetch only user_id to save memory
-            stmt = select(User.user_id).join(
+            # 2. Fetch Users with full_name for personalization
+            stmt = select(User.user_id, User.full_name).join(
                 schedule_batch_association, 
                 User.batch_id == schedule_batch_association.c.batch_id
             ).where(
@@ -208,16 +212,14 @@ async def execute_schedule_logic(bot: Bot, sched_id: int):
             )
             
             result = await session.execute(stmt)
-            # Use fetchmany or iterate to avoid loading all into memory at once if millions
-            # For "thousands", fetchall is fine (10k integers is tiny)
-            user_ids = [row[0] for row in result.fetchall()]
+            users = result.fetchall()
 
-            if not user_ids:
+            if not users:
                 logger.info(f"No users found for Schedule #{sched.id}")
             else:
-                logger.info(f"Enqueueing {len(user_ids)} messages for Schedule #{sched.id}")
-                for uid in user_ids:
-                    await broadcast_manager.enqueue_job(uid, sched.message, sched.id)
+                logger.info(f"Enqueueing {len(users)} messages for Schedule #{sched.id}")
+                for user_id, full_name in users:
+                    await broadcast_manager.enqueue_job(user_id, sched.message, sched.id, full_name)
 
             # 3. Calculate Next Run
             now = datetime.utcnow()

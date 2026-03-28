@@ -172,8 +172,13 @@ async def cmd_total_users(message: types.Message):
         count_result = await session.execute(select(func.count(User.id)))
         total_users = count_result.scalar_one()
 
+    # Format time in user-friendly way for Ethiopians
+    now = datetime.now()
+    time_str = now.strftime('%I:%M %p')  # 2:37 PM format
+    date_str = now.strftime('%b %d, %Y')  # Mar 28, 2026 format
+
     await message.answer(
-        f"Total registered users: {total_users}\nLast updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Total registered users: {total_users}\nUpdated: {time_str} on {date_str}",
         reply_markup=total_users_keyboard()
     )
 
@@ -196,8 +201,13 @@ async def refresh_total_users(callback_query: types.CallbackQuery):
         count_result = await session.execute(select(func.count(User.id)))
         total_users = count_result.scalar_one()
 
+    # Format time in user-friendly way for Ethiopians
+    now = datetime.now()
+    time_str = now.strftime('%I:%M %p')  # 2:37 PM format
+    date_str = now.strftime('%b %d, %Y')  # Mar 28, 2026 format
+
     await callback_query.message.edit_text(
-        f"Total registered users: {total_users}\nLast updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Total registered users: {total_users}\nUpdated: {time_str} on {date_str}",
         reply_markup=total_users_keyboard()
     )
     await callback_query.answer("Updated!")
@@ -206,20 +216,28 @@ async def refresh_total_users(callback_query: types.CallbackQuery):
 @dp.message(Command("whoami"))
 async def cmd_whoami(message: types.Message):
     user_id = message.from_user.id
-    username = message.from_user.username or "None"
+    username = message.from_user.username or "Not set"
     logger.info("whoami invoked by %s (@%s)", user_id, username)
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.user_id == user_id))
         user = result.scalar_one_or_none()
 
-    in_db = bool(user)
-    is_admin = user.is_admin if user else False
+    if not user:
+        await message.answer(
+            "👤 <b>Profile</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"📛 Username: @{username}\n\n"
+            "Use /start to register.",
+            parse_mode="HTML"
+        )
+        return
 
     await message.answer(
-        f"<b>Your Info</b>\n"
-        f"• ID: <code>{user_id}</code>\n"
-        f"• Username: @{username}\n",
+        "👤 <b>Your Profile</b>\n\n"
+        f"📛 Name: <b>{user.full_name or 'Not set'}</b>\n"
+        f"🔖 Username: @{username}\n"
+        f"⚧ Gender: {user.gender or 'Not set'}",
         parse_mode="HTML"
     )
 

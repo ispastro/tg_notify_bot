@@ -13,6 +13,7 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="start", description="🚀 Restart"),
         BotCommand(command="my_batch", description="🗂️ View batch"),
         BotCommand(command="edit_batch", description="🛠️ Change batch"),
+        BotCommand(command="edit_profile", description="✏️ Edit profile"),
         BotCommand(command="whoami", description="🧑💼 View profile"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
@@ -29,6 +30,7 @@ async def set_admin_commands(bot: Bot):
         BotCommand(command="manage_schedules", description="⚙️ Manage Schedules"),
         BotCommand(command="list_schedules", description="📋 List All Schedules"),
         BotCommand(command="total_users", description="📊 View Stats"),
+        BotCommand(command="edit_profile", description="✏️ Edit profile"),
         BotCommand(command="whoami", description="🧑💼 View profile"),
     ]
     
@@ -41,6 +43,7 @@ async def set_admin_commands(bot: Bot):
         BotCommand(command="total_users", description="📊 View Stats"),
         BotCommand(command="add_admin", description="👮 Add Admin"),
         BotCommand(command="remove_admin", description="🚫 Remove Admin"),
+        BotCommand(command="edit_profile", description="✏️ Edit profile"),
         BotCommand(command="whoami", description="🧑💼 View profile"),
     ]
 
