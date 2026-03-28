@@ -26,6 +26,8 @@ class User(Base):
     id = Column(Integer, primary_key=True)  # Internal DB ID
     user_id = Column(BIGINT, unique=True, nullable=False)  # Telegram ID
     username = Column(String, nullable=True)
+    full_name = Column(String, nullable=True)
+    gender = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
     join_date = Column(DateTime, default=datetime.utcnow)
