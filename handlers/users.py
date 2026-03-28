@@ -17,6 +17,8 @@ from config import SUPER_ADMIN_ID
 # FSM STATES
 # ──────────────────────────────────────────────────────────────
 class RegisterStates(StatesGroup):
+    entering_full_name = State()
+    choosing_gender = State()
     choosing_batch = State()
 
 
@@ -24,11 +26,21 @@ class RegisterStates(StatesGroup):
 # BATCH CONFIG (MATCH startup.py)
 # ──────────────────────────────────────────────────────────────
 BATCHES = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "6th Year"]
+GENDERS = ["Male", "Female"]
 
 
 # ──────────────────────────────────────────────────────────────
 # KEYBOARD BUILDER
 # ──────────────────────────────────────────────────────────────
+def create_gender_keyboard():
+    """Return keyboard with gender options."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=gender)] for gender in GENDERS],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+
 def create_batch_keyboard():
     """Return one-time keyboard with all batches."""
     return ReplyKeyboardMarkup(
@@ -45,60 +57,70 @@ def create_batch_keyboard():
 async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
-    full_name = message.from_user.full_name
 
     async with AsyncSessionLocal() as session:
-        # Check if user exists in DB
         result = await session.execute(select(User).where(User.user_id == user_id))
         user = result.scalar_one_or_none()
 
-        # Create user if not exists (e.g. after block/unblock)
+        # Create user if not exists
         if not user:
             user = User(
                 user_id=user_id,
                 username=username,
-                is_admin=(user_id == SUPER_ADMIN_ID),  # Only SUPER_ADMIN_ID gets is_admin=True
-                join_date=datetime.utcnow(),
-                batch_id=None
+                is_admin=(user_id == SUPER_ADMIN_ID),
+                join_date=datetime.utcnow()
             )
             session.add(user)
             await session.commit()
             await session.refresh(user)
 
-        # ───── ADMIN GREETING LOGIC ─────
+        # ───── ADMIN GREETING ─────
         if user.is_admin:
-            if user_id == SUPER_ADMIN_ID:
-                greeting = "Welcome back, <b>Super Admin</b>!\nYou have full control over the bot."
-            else:
-                greeting = "Welcome back, <b>Admin</b>!\nYou have elevated privileges."
-
+            greeting = "Welcome back, <b>Super Admin</b>!" if user_id == SUPER_ADMIN_ID else "Welcome back, <b>Admin</b>!"
             await message.answer(
                 f"{greeting}\n\nUse /schedule to send broadcasts.",
                 parse_mode="HTML",
                 reply_markup=ReplyKeyboardRemove()
             )
-            return  # Admins skip batch selection entirely
+            return
 
         # ───── REGULAR USER FLOW ─────
+        if not user.full_name:
+            await message.answer(
+                "👋 <b>Welcome!</b>\n\nPlease enter your <b>full name</b>:",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            await state.set_state(RegisterStates.entering_full_name)
+            return
+
+        if not user.gender:
+            await message.answer(
+                f"Hi {user.full_name}! Please select your gender:",
+                reply_markup=create_gender_keyboard()
+            )
+            await state.set_state(RegisterStates.choosing_gender)
+            return
+
         if not user.batch_id:
             await message.answer(
-                f"Hello{', ' + full_name if full_name else ''}!\n\n"
-                "Please select your batch to get started:",
+                f"Hi {user.full_name}! Please select your batch:",
                 reply_markup=create_batch_keyboard()
             )
             await state.set_state(RegisterStates.choosing_batch)
             return
 
-        # User has batch → normal welcome
+        # ───── FULLY REGISTERED USER ─────
         batch_result = await session.execute(
             select(Batch.name).where(Batch.id == user.batch_id)
         )
         batch_name = batch_result.scalar_one()
 
         await message.answer(
-            f"Welcome back, {full_name}!\n"
-            f"You're in batch: <b>{batch_name}</b>\n\n"
-            "• /my_batch — View your batch\n"
+            f"Welcome back, <b>{user.full_name}</b>! 👋\n\n"
+            f"📚 Batch: <b>{batch_name}</b>\n"
+            f"⚧ Gender: {user.gender}\n\n"
+            "• /my_profile — View your profile\n"
             "• /edit_batch — Change batch",
             parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
@@ -107,7 +129,68 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 
 # ──────────────────────────────────────────────────────────────
-# /my_batch — SHOW CURRENT BATCH
+# STEP 1: COLLECT FULL NAME
+# ──────────────────────────────────────────────────────────────
+@dp.message(RegisterStates.entering_full_name)
+async def process_full_name(message: types.Message, state: FSMContext):
+    full_name = message.text.strip()
+
+    if len(full_name) < 2:
+        await message.answer("Please enter a valid full name (at least 2 characters).")
+        return
+
+    if len(full_name) > 100:
+        await message.answer("Name is too long. Please enter a shorter name.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        from sqlalchemy import update
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(full_name=full_name)
+        )
+        await session.commit()
+
+    await message.answer(
+        f"Great, <b>{full_name}</b>! 👍\n\nNow, please select your gender:",
+        parse_mode="HTML",
+        reply_markup=create_gender_keyboard()
+    )
+    await state.set_state(RegisterStates.choosing_gender)
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 2: COLLECT GENDER
+# ──────────────────────────────────────────────────────────────
+@dp.message(RegisterStates.choosing_gender)
+async def process_gender(message: types.Message, state: FSMContext):
+    gender = message.text.strip()
+
+    if gender not in GENDERS:
+        await message.answer(
+            "Please select a valid option from the keyboard.",
+            reply_markup=create_gender_keyboard()
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(gender=gender)
+        )
+        await session.commit()
+
+    await message.answer(
+        "Perfect! ✅\n\nFinally, please select your batch:",
+        reply_markup=create_batch_keyboard()
+    )
+    await state.set_state(RegisterStates.choosing_batch)
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 3: COLLECT BATCH
 # ──────────────────────────────────────────────────────────────
 @dp.message(Command("my_batch"))
 async def cmd_my_batch(message: types.Message):
@@ -158,9 +241,8 @@ async def cmd_edit_batch(message: types.Message, state: FSMContext):
             return
 
         await message.answer(
-            "Select your <b>correct</b> batch:",
-            reply_markup=create_batch_keyboard(),
-            parse_mode="HTML"
+            "Select your new batch:",
+            reply_markup=create_batch_keyboard()
         )
         await state.set_state(RegisterStates.choosing_batch)
 
@@ -177,7 +259,6 @@ async def process_batch_selection(message: types.Message, state: FSMContext):
         return
 
     async with AsyncSessionLocal() as session:
-        # Get batch
         batch_result = await session.execute(
             select(Batch).where(Batch.name == selected_name)
         )
@@ -187,22 +268,62 @@ async def process_batch_selection(message: types.Message, state: FSMContext):
             await message.answer("Batch not found. Try again.")
             return
 
-        # Update user
         user_result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
         )
         user = user_result.scalar_one()
 
-        old_batch = user.batch_id
-        user.batch_id = batch.id
+        from sqlalchemy import update
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(batch_id=batch.id)
+        )
         await session.commit()
 
-        action = "updated" if old_batch else "selected"
         await message.answer(
-            f"Success! Your batch has been <b>{action}</b> to:\n"
-            f"<b>{batch.name}</b>",
+            f"🎉 <b>Registration Complete!</b>\n\n"
+            f"👤 Name: <b>{user.full_name}</b>\n"
+            f"⚧ Gender: {user.gender}\n"
+            f"📚 Batch: <b>{batch.name}</b>\n\n"
+            "You're all set! You'll now receive notifications for your batch.",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="HTML"
         )
-
         await state.clear()
+
+
+# ──────────────────────────────────────────────────────────────
+# /my_profile — VIEW PROFILE
+# ──────────────────────────────────────────────────────────────
+@dp.message(Command("my_profile"))
+async def cmd_my_profile(message: types.Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await message.answer("Use /start first.")
+            return
+
+        batch_name = "Not selected"
+        if user.batch_id:
+            batch_result = await session.execute(
+                select(Batch.name).where(Batch.id == user.batch_id)
+            )
+            batch_name = batch_result.scalar_one()
+
+        await message.answer(
+            f"👤 <b>Your Profile</b>\n\n"
+            f"📛 Name: <b>{user.full_name or 'Not set'}</b>\n"
+            f"⚧ Gender: {user.gender or 'Not set'}\n"
+            f"📚 Batch: <b>{batch_name}</b>\n"
+            f"📅 Joined: {user.join_date.strftime('%Y-%m-%d')}\n\n"
+            "• /edit_batch — Change batch",
+            parse_mode="HTML"
+        )
+
+
+# ──────────────────────────────────────────────────────────────
+# /my_batch — SHOW CURRENT BATCH
+# ──────────────────────────────────────────────────────────────

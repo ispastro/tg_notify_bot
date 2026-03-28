@@ -31,27 +31,45 @@ async def cmd_list_schedules(message: types.Message):
 
     async with AsyncSessionLocal() as session:
         schedules = (await session.execute(
-            select(Schedule).options(selectinload(Schedule.batches)).order_by(Schedule.id)
+            select(Schedule).options(selectinload(Schedule.batches)).order_by(Schedule.id.desc())
         )).scalars().all()
 
     if not schedules:
-        await message.answer("No active schedules.")
+        await message.answer(
+            "📭 <b>No Schedules Found</b>\n\n"
+            "Use /schedule to create your first broadcast.",
+            parse_mode="HTML"
+        )
         return
+
+    # Header with stats
+    active_count = sum(1 for s in schedules if s.is_active)
+    paused_count = len(schedules) - active_count
+    
+    header = (
+        f"📋 <b>All Schedules ({len(schedules)})</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Active: <code>{active_count}</code> | "
+        f"⏸️ Paused: <code>{paused_count}</code>\n\n"
+    )
 
     lines = []
     for s in schedules:
-        status = "✅ Active" if s.is_active else "⏸️ Paused"
+        status = "✅" if s.is_active else "⏸️"
         batches = ", ".join(b.name for b in s.batches) if s.batches else "None"
+        msg_preview = s.message[:40].replace("\n", " ")
+        if len(s.message) > 40:
+            msg_preview += "..."
+        
         lines.append(
-            f"<b>#{s.id}</b> | {status}\n"
-            f"Batches: <code>{batches}</code>\n"
-            f"Next: <code>{format_12hour(s.next_run)}</code>\n"
-            f"Type: <code>{s.type.value}</code>\n"
-            f"Preview: <i>{s.message[:60]}{'...' if len(s.message)>60 else ''}</i>\n"
+            f"<b>#{s.id}</b> {status} | {s.type.value.title()}\n"
+            f"  ⏰ {format_12hour(s.next_run)}\n"
+            f"  📦 {batches}\n"
+            f"  💬 <i>{msg_preview}</i>"
         )
 
     await message.answer(
-        f"<b>Scheduled Broadcasts ({len(schedules)})</b>\n\n" + "\n\n".join(lines),
+        header + "\n━━━━━━━━━━━━━━━━━━━━━━\n\n".join(lines),
         parse_mode="HTML"
     )
 
@@ -76,18 +94,23 @@ async def cmd_manage_schedules(message: types.Message, state: FSMContext):
 
     if not schedules:
         await message.answer(
-            "📭 <b>No schedules found.</b>\n\n"
+            "📭 <b>No Schedules Found</b>\n\n"
             "Use /schedule to create your first scheduled broadcast.",
             parse_mode="HTML"
         )
         return
 
+    active_count = sum(1 for s in schedules if s.is_active)
+    paused_count = len(schedules) - active_count
+
     await message.answer(
-        f"📋 <b>Schedule Management</b>\n\n"
-        f"Total: <code>{len(schedules)}</code> schedule(s)\n"
-        f"Active: <code>{sum(1 for s in schedules if s.is_active)}</code> | "
-        f"Paused: <code>{sum(1 for s in schedules if not s.is_active)}</code>\n\n"
-        f"Select a schedule to manage:",
+        f"📋 <b>Schedule Management</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Statistics:</b>\n"
+        f"• Total: <code>{len(schedules)}</code>\n"
+        f"• Active: <code>{active_count}</code> ✅\n"
+        f"• Paused: <code>{paused_count}</code> ⏸️\n\n"
+        f"👇 Select a schedule to manage:",
         reply_markup=get_schedule_list_keyboard(schedules, page=0),
         parse_mode="HTML"
     )
@@ -142,19 +165,22 @@ async def handle_view_schedule(callback: types.CallbackQuery, state: FSMContext)
     status = "🟢 Active" if sched.is_active else "⏸️ Paused"
     batches = ", ".join(b.name for b in sched.batches) if sched.batches else "None"
     next_run_str = format_12hour(sched.next_run) if sched.next_run else "Not scheduled"
-    cron_info = f"\n<b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
+    cron_info = f"\n🔄 <b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
     
     # Truncate message preview
     msg_preview = sched.message[:200] + "..." if len(sched.message) > 200 else sched.message
 
     text = (
-        f"📅 <b>Schedule #{sched.id}</b>\n\n"
-        f"<b>Status:</b> {status}\n"
-        f"<b>Type:</b> {sched.type.value.title()}\n"
-        f"<b>Batches:</b> {batches}\n"
-        f"<b>Next Run:</b> <code>{next_run_str}</code>{cron_info}\n"
-        f"<b>Created:</b> {sched.created_at.strftime('%Y-%m-%d %H:%M') if sched.created_at else 'Unknown'}\n\n"
-        f"<b>Message Preview:</b>\n<blockquote>{msg_preview}</blockquote>"
+        f"📅 <b>Schedule #{sched.id}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Status:</b> {status}\n"
+        f"📋 <b>Type:</b> {sched.type.value.title()}\n"
+        f"📦 <b>Batches:</b> {batches}\n"
+        f"⏰ <b>Next Run:</b>\n<code>{next_run_str}</code>{cron_info}\n"
+        f"📆 <b>Created:</b> {sched.created_at.strftime('%b %d, %Y') if sched.created_at else 'Unknown'}\n\n"
+        f"💬 <b>Message Preview:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<blockquote>{msg_preview}</blockquote>"
     )
 
     await callback.message.edit_text(
@@ -184,15 +210,24 @@ async def handle_back_to_list(callback: types.CallbackQuery, state: FSMContext):
         schedules = result.scalars().all()
 
     if not schedules:
-        await callback.message.edit_text("📭 No schedules found.")
+        await callback.message.edit_text(
+            "📭 <b>No Schedules Found</b>\n\n"
+            "Use /schedule to create a new broadcast.",
+            parse_mode="HTML"
+        )
         return
 
+    active_count = sum(1 for s in schedules if s.is_active)
+    paused_count = len(schedules) - active_count
+
     await callback.message.edit_text(
-        f"📋 <b>Schedule Management</b>\n\n"
-        f"Total: <code>{len(schedules)}</code> schedule(s)\n"
-        f"Active: <code>{sum(1 for s in schedules if s.is_active)}</code> | "
-        f"Paused: <code>{sum(1 for s in schedules if not s.is_active)}</code>\n\n"
-        f"Select a schedule to manage:",
+        f"📋 <b>Schedule Management</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Statistics:</b>\n"
+        f"• Total: <code>{len(schedules)}</code>\n"
+        f"• Active: <code>{active_count}</code> ✅\n"
+        f"• Paused: <code>{paused_count}</code> ⏸️\n\n"
+        f"👇 Select a schedule to manage:",
         reply_markup=get_schedule_list_keyboard(schedules, page=0),
         parse_mode="HTML"
     )
@@ -269,17 +304,20 @@ async def handle_toggle_schedule(callback: types.CallbackQuery, state: FSMContex
     status = "🟢 Active" if sched.is_active else "⏸️ Paused"
     batches = ", ".join(b.name for b in sched.batches) if sched.batches else "None"
     next_run_str = format_12hour(sched.next_run) if sched.next_run else "Not scheduled"
-    cron_info = f"\n<b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
+    cron_info = f"\n🔄 <b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
     msg_preview = sched.message[:200] + "..." if len(sched.message) > 200 else sched.message
 
     text = (
-        f"📅 <b>Schedule #{sched.id}</b>\n\n"
-        f"<b>Status:</b> {status}\n"
-        f"<b>Type:</b> {sched.type.value.title()}\n"
-        f"<b>Batches:</b> {batches}\n"
-        f"<b>Next Run:</b> <code>{next_run_str}</code>{cron_info}\n"
-        f"<b>Created:</b> {sched.created_at.strftime('%Y-%m-%d %H:%M') if sched.created_at else 'Unknown'}\n\n"
-        f"<b>Message Preview:</b>\n<blockquote>{msg_preview}</blockquote>"
+        f"📅 <b>Schedule #{sched.id}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Status:</b> {status}\n"
+        f"📋 <b>Type:</b> {sched.type.value.title()}\n"
+        f"📦 <b>Batches:</b> {batches}\n"
+        f"⏰ <b>Next Run:</b>\n<code>{next_run_str}</code>{cron_info}\n"
+        f"📆 <b>Created:</b> {sched.created_at.strftime('%b %d, %Y') if sched.created_at else 'Unknown'}\n\n"
+        f"💬 <b>Message Preview:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<blockquote>{msg_preview}</blockquote>"
     )
 
     await callback.message.edit_text(
@@ -350,18 +388,23 @@ async def handle_confirm_delete(callback: types.CallbackQuery, state: FSMContext
 
     if not schedules:
         await callback.message.edit_text(
-            "📭 <b>No schedules remaining.</b>\n\n"
+            "📭 <b>No Schedules Remaining</b>\n\n"
             "Use /schedule to create a new scheduled broadcast.",
             parse_mode="HTML"
         )
         return
 
+    active_count = sum(1 for s in schedules if s.is_active)
+    paused_count = len(schedules) - active_count
+
     await callback.message.edit_text(
-        f"📋 <b>Schedule Management</b>\n\n"
-        f"Total: <code>{len(schedules)}</code> schedule(s)\n"
-        f"Active: <code>{sum(1 for s in schedules if s.is_active)}</code> | "
-        f"Paused: <code>{sum(1 for s in schedules if not s.is_active)}</code>\n\n"
-        f"Select a schedule to manage:",
+        f"📋 <b>Schedule Management</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Statistics:</b>\n"
+        f"• Total: <code>{len(schedules)}</code>\n"
+        f"• Active: <code>{active_count}</code> ✅\n"
+        f"• Paused: <code>{paused_count}</code> ⏸️\n\n"
+        f"👇 Select a schedule to manage:",
         reply_markup=get_schedule_list_keyboard(schedules, page=0),
         parse_mode="HTML"
     )

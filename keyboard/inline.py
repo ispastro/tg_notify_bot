@@ -20,7 +20,7 @@ def get_batch_keyboard(batches: list[Batch], selected: list[int] | None = None):
             )
         ])
     buttons.append([
-        types.InlineKeyboardButton(text="✓ Done", callback_data="done_batches")
+        types.InlineKeyboardButton(text="Next ▶️", callback_data="done_batches")
     ])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -59,11 +59,21 @@ def get_schedule_list_keyboard(
     # Schedule items for current page
     for sched in schedules[start_idx:end_idx]:
         status_emoji = "🟢" if sched.is_active else "⏸️"
-        preview = sched.message[:25] + "..." if len(sched.message) > 25 else sched.message
-        preview = preview.replace("\n", " ")
+        
+        # Fixed-width preview (exactly 20 chars)
+        preview = sched.message[:20].replace("\n", " ")
+        if len(sched.message) > 20:
+            preview = preview[:17] + "..."
+        else:
+            # Pad with spaces to maintain alignment
+            preview = preview.ljust(20)
+        
+        # Format: "🟢 #18: Message preview here..."
+        button_text = f"{status_emoji} #{sched.id}: {preview}"
+        
         buttons.append([
             types.InlineKeyboardButton(
-                text=f"{status_emoji} #{sched.id}: {preview}",
+                text=button_text,
                 callback_data=f"sched_view_{sched.id}"
             )
         ])
