@@ -124,13 +124,16 @@ class BroadcastManager:
                 if full_name and text:
                     text = personalize_message(text, full_name)
                     logger.info(f"Worker {worker_id}: Personalized message for {user_id}")
+                elif full_name and not text:
+                    # Media without caption - create greeting
+                    text = f"ሰላም {full_name}"
                 
                 # Enforce Rate Limit
                 await self.limiter.acquire()
                 
-                # Send based on media type
+                # Send based on media type (text is already personalized)
                 if media_type:
-                    success = await self._send_media(user_id, media_type, media_file_id, text, full_name)
+                    success = await self._send_media(user_id, media_type, media_file_id, text)
                 else:
                     success = await self._send_safe(user_id, text)
                 
@@ -191,14 +194,8 @@ class BroadcastManager:
         logger.error(f"Failed to send to {user_id} after {MAX_RETRIES} attempts.")
         return False
 
-    async def _send_media(self, user_id: int, media_type: str, file_id: str, caption: str = None, full_name: str = None) -> bool:
-        """Send media (photo/video/document) with optional caption."""
-        # Add personalized greeting to caption if full_name provided
-        if full_name and caption:
-            caption = personalize_message(caption, full_name)
-        elif full_name:
-            caption = f"ሰላም {full_name}"
-        
+    async def _send_media(self, user_id: int, media_type: str, file_id: str, caption: str = None) -> bool:
+        """Send media (photo/video/document) with caption (already personalized)."""
         for attempt in range(MAX_RETRIES + 1):
             try:
                 if media_type == "photo":
