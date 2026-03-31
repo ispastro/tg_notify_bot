@@ -272,12 +272,43 @@ async def process_time_selection(callback: types.CallbackQuery, state: FSMContex
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.entering_message)
 async def process_message(message: types.Message, state: FSMContext):
-    """Process message content for schedule."""
+    """Process message content or media for schedule."""
     if not await ensure_user_exists(message.from_user.id):
         await message.answer("No permission.")
         return
 
-    await state.update_data(message_text=message.text)
+    # Handle different message types
+    media_type = None
+    media_file_id = None
+    caption = None
+    text_message = None
+    
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id  # Get highest resolution
+        caption = message.caption
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+        caption = message.caption
+    elif message.document:
+        media_type = "document"
+        media_file_id = message.document.file_id
+        caption = message.caption
+    elif message.text:
+        text_message = message.text
+    else:
+        await message.answer("❌ Unsupported message type. Please send text, photo, video, or document.")
+        return
+    
+    # Store in state
+    await state.update_data(
+        message_text=text_message,
+        media_type=media_type,
+        media_file_id=media_file_id,
+        caption=caption
+    )
+    
     data = await state.get_data()
 
     async with AsyncSessionLocal() as session:
@@ -287,13 +318,22 @@ async def process_message(message: types.Message, state: FSMContext):
         ]
 
     nice_time = format_12hour(data["next_run"])
+    
+    # Build preview based on content type
+    if media_type:
+        media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(media_type, "")
+        content_preview = f"{media_icon} <b>Media:</b> {media_type.title()}"
+        if caption:
+            content_preview += f"\n<b>Caption:</b>\n<pre>{caption}</pre>"
+    else:
+        content_preview = f"<b>Message:</b>\n<pre>{text_message}</pre>"
 
     preview = (
         f"<b>New Schedule</b>\n\n"
         f"<b>Batches:</b> {', '.join(batch_names)}\n"
         f"<b>Type:</b> {data['schedule_type'].value.title()}\n"
         f"<b>Send Time:</b> {nice_time}\n\n"
-        f"<b>Message:</b>\n<pre>{message.text}</pre>\n\n"
+        f"{content_preview}\n\n"
         f"💡 <i>Note: 'ሰላም [Name]' will be automatically added for each user</i>\n\n"
         f"Send this schedule?"
     )

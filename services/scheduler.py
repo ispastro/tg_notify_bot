@@ -100,36 +100,39 @@ class BroadcastManager:
             w.cancel()
         logger.info("BroadcastManager STOPPED.")
 
-    async def enqueue_job(self, user_id: int, message: str, sched_id: int, full_name: str = None):
+    async def enqueue_job(self, user_id: int, message: str, sched_id: int, full_name: str = None, media_type: str = None, media_file_id: str = None):
         """Add a job to the queue. Non-blocking unless queue is full."""
         try:
-            self.queue.put_nowait((user_id, message, sched_id, full_name))
+            self.queue.put_nowait((user_id, message, sched_id, full_name, media_type, media_file_id))
             self.total_enqueued += 1
             if self.total_enqueued % 1000 == 0:
                 logger.info(f"Queue Stats: size={self.queue.qsize()}, total_enqueued={self.total_enqueued}")
         except asyncio.QueueFull:
             logger.warning("Broadcast queue FULL! Waiting to enqueue...")
-            await self.queue.put((user_id, message, sched_id, full_name))
+            await self.queue.put((user_id, message, sched_id, full_name, media_type, media_file_id))
 
     async def _worker(self, worker_id: int):
         """Worker loop processing messages from queue."""
         while self.running:
             try:
-                user_id, text, sched_id, full_name = await self.queue.get()
+                user_id, text, sched_id, full_name, media_type, media_file_id = await self.queue.get()
                 
                 # Debug logging
-                logger.info(f"Worker {worker_id}: user_id={user_id}, full_name={full_name}, has_placeholder={'{{name}}' in text}")
+                logger.info(f"Worker {worker_id}: user_id={user_id}, full_name={full_name}, media_type={media_type}")
                 
-                # Personalize message if full_name provided
-                if full_name:
+                # Personalize caption/message if full_name provided
+                if full_name and text:
                     text = personalize_message(text, full_name)
                     logger.info(f"Worker {worker_id}: Personalized message for {user_id}")
                 
                 # Enforce Rate Limit
                 await self.limiter.acquire()
                 
-                # Send
-                success = await self._send_safe(user_id, text)
+                # Send based on media type
+                if media_type:
+                    success = await self._send_media(user_id, media_type, media_file_id, text, full_name)
+                else:
+                    success = await self._send_safe(user_id, text)
                 
                 if success:
                     self.total_sent += 1
@@ -188,6 +191,67 @@ class BroadcastManager:
         logger.error(f"Failed to send to {user_id} after {MAX_RETRIES} attempts.")
         return False
 
+    async def _send_media(self, user_id: int, media_type: str, file_id: str, caption: str = None, full_name: str = None) -> bool:
+        """Send media (photo/video/document) with optional caption."""
+        # Add personalized greeting to caption if full_name provided
+        if full_name and caption:
+            caption = personalize_message(caption, full_name)
+        elif full_name:
+            caption = f"ሰላም {full_name}"
+        
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                if media_type == "photo":
+                    await self.bot.send_photo(
+                        chat_id=user_id,
+                        photo=file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif media_type == "video":
+                    await self.bot.send_video(
+                        chat_id=user_id,
+                        video=file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif media_type == "document":
+                    await self.bot.send_document(
+                        chat_id=user_id,
+                        document=file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                return True
+
+            except TelegramRetryAfter as e:
+                wait_s = e.retry_after
+                logger.warning(f"FloodWait: Sleeping {wait_s}s for user {user_id}")
+                await asyncio.sleep(wait_s)
+                continue
+
+            except TelegramForbiddenError:
+                return False
+
+            except TelegramBadRequest as e:
+                if "chat not found" in str(e).lower() or "deactivated" in str(e).lower():
+                    return False
+                logger.warning(f"BadRequest to {user_id}: {e}")
+                return False
+
+            except TelegramAPIError as e:
+                logger.warning(f"API Error to {user_id} (Attempt {attempt+1}/{MAX_RETRIES}): {e}")
+
+            except Exception as e:
+                logger.error(f"Unexpected error to {user_id}: {e}")
+
+            if attempt < MAX_RETRIES:
+                sleep_time = BASE_RETRY_DELAY * (2 ** attempt)
+                await asyncio.sleep(sleep_time)
+
+        logger.error(f"Failed to send media to {user_id} after {MAX_RETRIES} attempts.")
+        return False
+
 
 # ==============================================================================
 # SCHEDULER LOGIC
@@ -222,9 +286,19 @@ async def execute_schedule_logic(bot: Bot, sched_id: int):
                 logger.info(f"No users found for Schedule #{sched.id}")
             else:
                 logger.info(f"Enqueueing {len(users)} messages for Schedule #{sched.id}")
+                # Determine what to send
+                message_content = sched.caption if sched.media_type else sched.message
+                
                 for user_id, full_name in users:
                     logger.info(f"Enqueuing for user_id={user_id}, full_name={full_name}")
-                    await broadcast_manager.enqueue_job(user_id, sched.message, sched.id, full_name)
+                    await broadcast_manager.enqueue_job(
+                        user_id, 
+                        message_content, 
+                        sched.id, 
+                        full_name,
+                        sched.media_type,
+                        sched.media_file_id
+                    )
 
             # 3. Calculate Next Run
             now = datetime.utcnow()
