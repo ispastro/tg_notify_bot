@@ -3,15 +3,15 @@
 
 def personalize_message(message: str, full_name: str) -> str:
     """
-    Replace {name} placeholder with user's full name.
+    Prepend 'ሰላም [Name]' greeting to message.
     
     Args:
-        message: Template message with {name} placeholder
+        message: The broadcast message
         full_name: User's registered full name
         
     Returns:
-        Personalized message with name inserted
+        Personalized message with greeting prepended
     """
     if not full_name:
         return message
-    return message.replace("{name}", full_name)
+    return f"ሰላም {full_name}\n{message}"
