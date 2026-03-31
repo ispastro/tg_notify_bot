@@ -4,6 +4,7 @@ from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from datetime import datetime, timedelta
+import re
 from loader import dp
 from db.session import AsyncSessionLocal
 from db.models import Batch, ScheduleType
@@ -175,12 +176,12 @@ async def calendar_day_selected(callback: types.CallbackQuery, state: FSMContext
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.choosing_time)
 async def process_time_input(message: types.Message, state: FSMContext):
-    """Process 12-hour format time input (e.g., '2:30 PM')."""
+    """Process 12-hour format time input (e.g., '2:30 PM' or '2:30PM')."""
     if not await ensure_user_exists(message.from_user.id):
         await message.answer("No permission.")
         return
 
-    time_text = message.text.strip()
+    time_text = message.text.strip().upper()
     data = await state.get_data()
     selected_date = data.get("selected_date")
 
@@ -188,9 +189,14 @@ async def process_time_input(message: types.Message, state: FSMContext):
         await message.answer("Please select a date first using /schedule")
         return
 
+    # Normalize: add space before AM/PM if missing
+    # 5:20PM -> 5:20 PM, 5:20AM -> 5:20 AM
+    import re
+    time_text = re.sub(r'(\d)(AM|PM)$', r'\1 \2', time_text)
+
     # Parse 12-hour format time
     try:
-        time_obj = datetime.strptime(time_text.upper(), "%I:%M %p")
+        time_obj = datetime.strptime(time_text, "%I:%M %p")
         hour = time_obj.hour
         minute = time_obj.minute
     except ValueError:
@@ -198,9 +204,9 @@ async def process_time_input(message: types.Message, state: FSMContext):
             "❌ Invalid time format!\n\n"
             "Please use 12-hour format:\n"
             "<b>Examples:</b>\n"
-            "• 9:00 AM\n"
-            "• 2:30 PM\n"
-            "• 6:45 PM",
+            "• 9:00 AM or 9:00AM\n"
+            "• 2:30 PM or 2:30PM\n"
+            "• 6:45 pm or 6:45pm",
             parse_mode="HTML"
         )
         return
@@ -222,8 +228,7 @@ async def process_time_input(message: types.Message, state: FSMContext):
     ethiopia_display = format_12hour(next_run_utc)
     await message.answer(
         f"✅ Scheduled for: <b>{ethiopia_display}</b>\n\n"
-        "Now enter the message you want to send:\n\n"
-        "💡 <i>Tip: Each user will receive a personalized greeting with their name</i>",
+        "Now enter the message you want to send:",
         parse_mode="HTML"
     )
     await state.set_state(ScheduleStates.entering_message)
@@ -272,12 +277,43 @@ async def process_time_selection(callback: types.CallbackQuery, state: FSMContex
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.entering_message)
 async def process_message(message: types.Message, state: FSMContext):
-    """Process message content for schedule."""
+    """Process message content or media for schedule."""
     if not await ensure_user_exists(message.from_user.id):
         await message.answer("No permission.")
         return
 
-    await state.update_data(message_text=message.text)
+    # Handle different message types
+    media_type = None
+    media_file_id = None
+    caption = None
+    text_message = None
+    
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id  # Get highest resolution
+        caption = message.caption
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+        caption = message.caption
+    elif message.document:
+        media_type = "document"
+        media_file_id = message.document.file_id
+        caption = message.caption
+    elif message.text:
+        text_message = message.text
+    else:
+        await message.answer("❌ Unsupported message type. Please send text, photo, video, or document.")
+        return
+    
+    # Store in state
+    await state.update_data(
+        message_text=text_message,
+        media_type=media_type,
+        media_file_id=media_file_id,
+        caption=caption
+    )
+    
     data = await state.get_data()
 
     async with AsyncSessionLocal() as session:
@@ -287,14 +323,22 @@ async def process_message(message: types.Message, state: FSMContext):
         ]
 
     nice_time = format_12hour(data["next_run"])
+    
+    # Build preview based on content type
+    if media_type:
+        media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(media_type, "")
+        content_preview = f"{media_icon} <b>Media:</b> {media_type.title()}"
+        if caption:
+            content_preview += f"\n<b>Caption:</b>\n<pre>{caption}</pre>"
+    else:
+        content_preview = f"<b>Message:</b>\n<pre>{text_message}</pre>"
 
     preview = (
         f"<b>New Schedule</b>\n\n"
         f"<b>Batches:</b> {', '.join(batch_names)}\n"
         f"<b>Type:</b> {data['schedule_type'].value.title()}\n"
         f"<b>Send Time:</b> {nice_time}\n\n"
-        f"<b>Message:</b>\n<pre>{message.text}</pre>\n\n"
-        f"💡 <i>Note: 'ሰላም [Name]' will be automatically added for each user</i>\n\n"
+        f"{content_preview}\n\n"
         f"Send this schedule?"
     )
 
@@ -318,10 +362,17 @@ async def confirm_schedule(callback: types.CallbackQuery, state: FSMContext):
         return
 
     data = await state.get_data()
+    
+    # Debug logging
+    logger.info(f"Confirming schedule. State data keys: {data.keys()}")
+    logger.info(f"message_text present: {'message_text' in data}")
+    logger.info(f"message_text value: {data.get('message_text')}")
+    
     saved = await save_schedule(data, callback.from_user.id)
 
     if not saved:
-        await callback.message.edit_text("Failed to create schedule. Try again.")
+        await callback.message.edit_text("❌ Failed to create schedule. Please try again.")
+        await state.clear()
         return
 
     await callback.message.edit_text(

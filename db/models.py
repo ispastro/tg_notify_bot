@@ -47,7 +47,10 @@ class Batch(Base):
 class Schedule(Base):
     __tablename__ = "schedules"
     id = Column(Integer, primary_key=True)
-    message = Column(Text, nullable=False)
+    message = Column(Text, nullable=True)  # Now optional (can be media-only)
+    media_type = Column(String, nullable=True)  # 'photo', 'video', 'document', or None
+    media_file_id = Column(String, nullable=True)  # Telegram file_id
+    caption = Column(Text, nullable=True)  # Caption for media (optional)
     type = Column(Enum(ScheduleType), nullable=False)
     cron_expr = Column(String, nullable=True)      # e.g., "0 9 * * 1"
     next_run = Column(DateTime, nullable=True)     # When to send next

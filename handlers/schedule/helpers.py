@@ -55,8 +55,21 @@ async def save_schedule(data: dict, admin_id: int) -> Schedule | None:
     
     async with AsyncSessionLocal() as session:
         try:
+            # Validate: must have either message_text or media
+            message_text = data.get("message_text")
+            media_type = data.get("media_type")
+            media_file_id = data.get("media_file_id")
+            caption = data.get("caption")
+            
+            if not message_text and not media_file_id:
+                logger.error(f"Schedule save failed: No message or media provided. Data: {data}")
+                return None
+            
             sched = Schedule(
-                message=data["message_text"],
+                message=message_text,
+                media_type=media_type,
+                media_file_id=media_file_id,
+                caption=caption,
                 type=data["schedule_type"],
                 next_run=data["next_run"],
                 admin_id=admin_id,
@@ -71,6 +84,7 @@ async def save_schedule(data: dict, admin_id: int) -> Schedule | None:
                 )
 
             await session.commit()
+            logger.info(f"Schedule #{sched.id} saved successfully (media: {media_type})")
             return sched
         except Exception as e:
             await session.rollback()
