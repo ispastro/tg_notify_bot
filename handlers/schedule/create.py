@@ -228,8 +228,7 @@ async def process_time_input(message: types.Message, state: FSMContext):
     ethiopia_display = format_12hour(next_run_utc)
     await message.answer(
         f"✅ Scheduled for: <b>{ethiopia_display}</b>\n\n"
-        "Now enter the message you want to send:\n\n"
-        "💡 <i>Tip: Each user will receive a personalized greeting with their name</i>",
+        "Now enter the message you want to send:",
         parse_mode="HTML"
     )
     await state.set_state(ScheduleStates.entering_message)
@@ -340,7 +339,6 @@ async def process_message(message: types.Message, state: FSMContext):
         f"<b>Type:</b> {data['schedule_type'].value.title()}\n"
         f"<b>Send Time:</b> {nice_time}\n\n"
         f"{content_preview}\n\n"
-        f"💡 <i>Note: 'ሰላም [Name]' will be automatically added for each user</i>\n\n"
         f"Send this schedule?"
     )
 
