@@ -4,6 +4,7 @@ from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from datetime import datetime, timedelta
+import re
 from loader import dp
 from db.session import AsyncSessionLocal
 from db.models import Batch, ScheduleType
@@ -175,12 +176,12 @@ async def calendar_day_selected(callback: types.CallbackQuery, state: FSMContext
 # ----------------------------------------------------------------------
 @dp.message(ScheduleStates.choosing_time)
 async def process_time_input(message: types.Message, state: FSMContext):
-    """Process 12-hour format time input (e.g., '2:30 PM')."""
+    """Process 12-hour format time input (e.g., '2:30 PM' or '2:30PM')."""
     if not await ensure_user_exists(message.from_user.id):
         await message.answer("No permission.")
         return
 
-    time_text = message.text.strip()
+    time_text = message.text.strip().upper()
     data = await state.get_data()
     selected_date = data.get("selected_date")
 
@@ -188,9 +189,14 @@ async def process_time_input(message: types.Message, state: FSMContext):
         await message.answer("Please select a date first using /schedule")
         return
 
+    # Normalize: add space before AM/PM if missing
+    # 5:20PM -> 5:20 PM, 5:20AM -> 5:20 AM
+    import re
+    time_text = re.sub(r'(\d)(AM|PM)$', r'\1 \2', time_text)
+
     # Parse 12-hour format time
     try:
-        time_obj = datetime.strptime(time_text.upper(), "%I:%M %p")
+        time_obj = datetime.strptime(time_text, "%I:%M %p")
         hour = time_obj.hour
         minute = time_obj.minute
     except ValueError:
@@ -198,9 +204,9 @@ async def process_time_input(message: types.Message, state: FSMContext):
             "❌ Invalid time format!\n\n"
             "Please use 12-hour format:\n"
             "<b>Examples:</b>\n"
-            "• 9:00 AM\n"
-            "• 2:30 PM\n"
-            "• 6:45 PM",
+            "• 9:00 AM or 9:00AM\n"
+            "• 2:30 PM or 2:30PM\n"
+            "• 6:45 pm or 6:45pm",
             parse_mode="HTML"
         )
         return
