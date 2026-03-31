@@ -318,10 +318,17 @@ async def confirm_schedule(callback: types.CallbackQuery, state: FSMContext):
         return
 
     data = await state.get_data()
+    
+    # Debug logging
+    logger.info(f"Confirming schedule. State data keys: {data.keys()}")
+    logger.info(f"message_text present: {'message_text' in data}")
+    logger.info(f"message_text value: {data.get('message_text')}")
+    
     saved = await save_schedule(data, callback.from_user.id)
 
     if not saved:
-        await callback.message.edit_text("Failed to create schedule. Try again.")
+        await callback.message.edit_text("❌ Failed to create schedule. Please try again.")
+        await state.clear()
         return
 
     await callback.message.edit_text(

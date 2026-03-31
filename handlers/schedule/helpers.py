@@ -55,8 +55,14 @@ async def save_schedule(data: dict, admin_id: int) -> Schedule | None:
     
     async with AsyncSessionLocal() as session:
         try:
+            # Validate required fields
+            message_text = data.get("message_text")
+            if not message_text:
+                logger.error(f"Schedule save failed: message_text is missing or empty. Data: {data}")
+                return None
+            
             sched = Schedule(
-                message=data["message_text"],
+                message=message_text,
                 type=data["schedule_type"],
                 next_run=data["next_run"],
                 admin_id=admin_id,
@@ -71,6 +77,7 @@ async def save_schedule(data: dict, admin_id: int) -> Schedule | None:
                 )
 
             await session.commit()
+            logger.info(f"Schedule #{sched.id} saved successfully")
             return sched
         except Exception as e:
             await session.rollback()
