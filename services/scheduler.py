@@ -117,9 +117,13 @@ class BroadcastManager:
             try:
                 user_id, text, sched_id, full_name = await self.queue.get()
                 
+                # Debug logging
+                logger.info(f"Worker {worker_id}: user_id={user_id}, full_name={full_name}, has_placeholder={'{{name}}' in text}")
+                
                 # Personalize message if full_name provided
                 if full_name:
                     text = personalize_message(text, full_name)
+                    logger.info(f"Worker {worker_id}: Personalized message for {user_id}")
                 
                 # Enforce Rate Limit
                 await self.limiter.acquire()
@@ -219,6 +223,7 @@ async def execute_schedule_logic(bot: Bot, sched_id: int):
             else:
                 logger.info(f"Enqueueing {len(users)} messages for Schedule #{sched.id}")
                 for user_id, full_name in users:
+                    logger.info(f"Enqueuing for user_id={user_id}, full_name={full_name}")
                     await broadcast_manager.enqueue_job(user_id, sched.message, sched.id, full_name)
 
             # 3. Calculate Next Run
