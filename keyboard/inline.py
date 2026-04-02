@@ -30,7 +30,7 @@ def get_schedule_type_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📅 Weekly (ሳምንታዊ)", callback_data="type_weekly")],
         [types.InlineKeyboardButton(text="📆 Monthly (ወርሃዊ)", callback_data="type_monthly")],
-        [types.InlineKeyboardButton(text="⚙️ Custom (ብጁ)", callback_data="type_custom")],
+        [types.InlineKeyboardButton(text="⚙️ Custom (የ አንድ ጊዜ)", callback_data="type_custom")],
     ])
 
 
