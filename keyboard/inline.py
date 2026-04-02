@@ -60,9 +60,21 @@ def get_schedule_list_keyboard(
     for sched in schedules[start_idx:end_idx]:
         status_emoji = "🟢" if sched.is_active else "⏸️"
         
+        # Determine content for preview
+        if sched.media_type:
+            # Media schedule - show media type and caption preview
+            media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(sched.media_type, "📎")
+            if sched.caption:
+                content = f"{media_icon} {sched.caption}"
+            else:
+                content = f"{media_icon} (no caption)"
+        else:
+            # Text schedule - show message
+            content = sched.message or "(empty)"
+        
         # Fixed-width preview (exactly 20 chars)
-        preview = sched.message[:20].replace("\n", " ")
-        if len(sched.message) > 20:
+        preview = content[:20].replace("\n", " ")
+        if len(content) > 20:
             preview = preview[:17] + "..."
         else:
             # Pad with spaces to maintain alignment
