@@ -28,9 +28,9 @@ def get_batch_keyboard(batches: list[Batch], selected: list[int] | None = None):
 def get_schedule_type_keyboard():
     """Keyboard for selecting schedule type."""
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📅 Weekly", callback_data="type_weekly")],
-        [types.InlineKeyboardButton(text="📆 Monthly", callback_data="type_monthly")],
-        [types.InlineKeyboardButton(text="⚙️ Custom (cron)", callback_data="type_custom")],
+        [types.InlineKeyboardButton(text="📅 Weekly (ሳምንታዊ)", callback_data="type_weekly")],
+        [types.InlineKeyboardButton(text="📆 Monthly (ወርሃዊ)", callback_data="type_monthly")],
+        [types.InlineKeyboardButton(text="⚙️ Custom (ብጁ)", callback_data="type_custom")],
     ])
 
 
