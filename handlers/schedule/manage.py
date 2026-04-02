@@ -57,8 +57,16 @@ async def cmd_list_schedules(message: types.Message):
     for s in schedules:
         status = "✅" if s.is_active else "⏸️"
         batches = ", ".join(b.name for b in s.batches) if s.batches else "None"
-        msg_preview = s.message[:40].replace("\n", " ")
-        if len(s.message) > 40:
+        
+        # Handle both text and media schedules
+        if s.media_type:
+            media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(s.media_type, "📎")
+            content = f"{media_icon} {s.caption[:40] if s.caption else '(no caption)'}"
+        else:
+            content = (s.message or "(empty)")[:40]
+        
+        msg_preview = content.replace("\n", " ")
+        if len(content) > 40:
             msg_preview += "..."
         
         lines.append(
@@ -167,8 +175,19 @@ async def handle_view_schedule(callback: types.CallbackQuery, state: FSMContext)
     next_run_str = format_12hour(sched.next_run) if sched.next_run else "Not scheduled"
     cron_info = f"\n🔄 <b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
     
-    # Truncate message preview
-    msg_preview = sched.message[:200] + "..." if len(sched.message) > 200 else sched.message
+    # Handle both text and media schedules
+    if sched.media_type:
+        media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(sched.media_type, "📎")
+        if sched.caption:
+            content = sched.caption
+            msg_preview = content[:200] + "..." if len(content) > 200 else content
+        else:
+            msg_preview = f"{media_icon} (no caption)"
+        content_label = "Caption Preview"
+    else:
+        content = sched.message or "(empty)"
+        msg_preview = content[:200] + "..." if len(content) > 200 else content
+        content_label = "Message Preview"
 
     text = (
         f"📅 <b>Schedule #{sched.id}</b>\n"
@@ -178,7 +197,7 @@ async def handle_view_schedule(callback: types.CallbackQuery, state: FSMContext)
         f"📦 <b>Batches:</b> {batches}\n"
         f"⏰ <b>Next Run:</b>\n<code>{next_run_str}</code>{cron_info}\n"
         f"📆 <b>Created:</b> {sched.created_at.strftime('%b %d, %Y') if sched.created_at else 'Unknown'}\n\n"
-        f"💬 <b>Message Preview:</b>\n"
+        f"💬 <b>{content_label}:</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<blockquote>{msg_preview}</blockquote>"
     )
@@ -305,7 +324,20 @@ async def handle_toggle_schedule(callback: types.CallbackQuery, state: FSMContex
     batches = ", ".join(b.name for b in sched.batches) if sched.batches else "None"
     next_run_str = format_12hour(sched.next_run) if sched.next_run else "Not scheduled"
     cron_info = f"\n🔄 <b>Cron:</b> <code>{sched.cron_expr}</code>" if sched.cron_expr else ""
-    msg_preview = sched.message[:200] + "..." if len(sched.message) > 200 else sched.message
+    
+    # Handle both text and media schedules
+    if sched.media_type:
+        media_icon = {"photo": "📷", "video": "🎥", "document": "📄"}.get(sched.media_type, "📎")
+        if sched.caption:
+            content = sched.caption
+            msg_preview = content[:200] + "..." if len(content) > 200 else content
+        else:
+            msg_preview = f"{media_icon} (no caption)"
+        content_label = "Caption Preview"
+    else:
+        content = sched.message or "(empty)"
+        msg_preview = content[:200] + "..." if len(content) > 200 else content
+        content_label = "Message Preview"
 
     text = (
         f"📅 <b>Schedule #{sched.id}</b>\n"
@@ -315,7 +347,7 @@ async def handle_toggle_schedule(callback: types.CallbackQuery, state: FSMContex
         f"📦 <b>Batches:</b> {batches}\n"
         f"⏰ <b>Next Run:</b>\n<code>{next_run_str}</code>{cron_info}\n"
         f"📆 <b>Created:</b> {sched.created_at.strftime('%b %d, %Y') if sched.created_at else 'Unknown'}\n\n"
-        f"💬 <b>Message Preview:</b>\n"
+        f"💬 <b>{content_label}:</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<blockquote>{msg_preview}</blockquote>"
     )
